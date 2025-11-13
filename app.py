@@ -1,20 +1,21 @@
 """
 Outlook to Gmail Forwarder
 
-Refer to README.md for installation, Gmail API setup, and usage instructions.
-"""
+Installation requirements (run once):
+    pip install selenium webdriver-manager google-api-python-client google-auth-httplib2 \
+                google-auth-oauthlib cryptography streamlit python-dateutil
 
+Run the Streamlit UI:
+    streamlit run app.py
+
+Test on a non-production (dummy) account before using with your primary accounts.
+"""
 import base64
-import importlib.util
 import json
 import pickle
-import platform
 import random
-import subprocess
-import sys
 import threading
 import time
-import webbrowser
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -25,91 +26,6 @@ from typing import Deque, Dict, List, Optional
 
 import streamlit as st
 import streamlit.components.v1 as components
-from contextlib import contextmanager
-
-
-REQUIRED_PACKAGES = {
-    "selenium": "selenium",
-    "webdriver-manager": "webdriver_manager",
-    "google-api-python-client": "googleapiclient",
-    "google-auth-httplib2": "googleapiclient.discovery",
-    "google-auth-oauthlib": "google_auth_oauthlib",
-    "cryptography": "cryptography",
-    "streamlit": "streamlit",
-    "python-dateutil": "dateutil",
-}
-
-
-def detect_missing_packages() -> List[str]:
-    missing: List[str] = []
-    for pip_name, module_name in REQUIRED_PACKAGES.items():
-        if importlib.util.find_spec(module_name) is None:
-            missing.append(pip_name)
-    return sorted(set(missing))
-
-
-MISSING_PACKAGES = detect_missing_packages()
-
-
-def render_missing_dependencies() -> None:
-    st.set_page_config(page_title="Outlook ➜ Gmail Forwarder", page_icon="📬")
-    st.title("📦 Dependency setup required")
-    st.warning(
-        "The following Python packages are required before the automation can run:")
-    st.code("\n".join(MISSING_PACKAGES) or "None", language="text")
-
-    windows_command = (
-        "py -m pip install " + " ".join(MISSING_PACKAGES)
-        if MISSING_PACKAGES
-        else "py -m pip install <packages>"
-    )
-    unix_command = (
-        f"{sys.executable} -m pip install " + " ".join(MISSING_PACKAGES)
-        if MISSING_PACKAGES
-        else f"{sys.executable} -m pip install <packages>"
-    )
-
-    st.markdown("**Recommended command (Windows):**")
-    st.code(windows_command, language="powershell")
-    st.markdown("**Recommended command (this environment):**")
-    st.code(unix_command, language="bash")
-
-    if "install_log" not in st.session_state:
-        st.session_state["install_log"] = ""
-
-    if st.button("Install requirements now") and MISSING_PACKAGES:
-        command = ["py", "-m", "pip", "install", *MISSING_PACKAGES]
-        if platform.system() != "Windows" or not shutil.which("py"):
-            command = [sys.executable, "-m", "pip", "install", *MISSING_PACKAGES]
-        try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            st.session_state["install_log"] = (
-                f"Command: {' '.join(command)}\n"
-                f"Return code: {completed.returncode}\n\n"
-                f"STDOUT:\n{completed.stdout}\n"
-                f"STDERR:\n{completed.stderr}"
-            )
-        except Exception as exc:  # noqa: BLE001
-            st.session_state["install_log"] = f"Failed to run installer: {exc}"
-
-    if st.session_state.get("install_log"):
-        st.markdown("### Installation output")
-        st.code(st.session_state["install_log"])
-
-    st.stop()
-
-
-if MISSING_PACKAGES:
-    import shutil  # noqa: WPS433
-
-    render_missing_dependencies()
-
-
 from cryptography.fernet import Fernet
 from dateutil import tz
 from google.oauth2.credentials import Credentials
@@ -201,9 +117,6 @@ class CredentialManager:
         self.secret_path.write_bytes(token)
         log_message("Encrypted Outlook credentials saved.")
 
-    def credentials_stored(self) -> bool:
-        return self.secret_path.exists()
-
     def load_credentials(self) -> Optional[Dict[str, str]]:
         if not self.secret_path.exists():
             return None
@@ -215,16 +128,6 @@ class CredentialManager:
         except Exception as exc:  # noqa: BLE001
             log_message(f"Failed to decrypt Outlook credentials: {exc}")
             return None
-
-    @contextmanager
-    def temporary_credentials(self) -> Dict[str, str]:
-        creds = self.load_credentials()
-        try:
-            yield creds or {}
-        finally:
-            if creds:
-                for key in list(creds.keys()):
-                    creds[key] = ""
 
 
 class SettingsManager:
@@ -351,10 +254,6 @@ class GmailForwarder:
                 self._service = self._build_service()
         return self._service
 
-    def authorize(self) -> None:
-        self._ensure_service()
-        log_message("Gmail API authorized and ready.")
-
     def send_email(self, to_email: str, subject: str, body_html: str, body_text: str) -> None:
         service = self._ensure_service()
         message = MIMEMultipart("alternative")
@@ -449,45 +348,45 @@ class OutlookAutomation:
         return any(keyword in page_text for keyword in keywords)
 
     def _attempt_headless_login(self, driver: webdriver.Chrome) -> None:
-        with self.credential_manager.temporary_credentials() as creds:
-            if not creds:
-                raise ManualLoginRequired("Encrypted Outlook credentials missing.")
-            log_message("Attempting headless login using stored credentials...")
-            driver.get(OUTLOOK_LOGIN_URL)
-            wait = WebDriverWait(driver, 30)
-            try:
-                email_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="email"]')))
-                email_input.clear()
-                email_input.send_keys(creds.get("username", ""))
-                human_delay()
-                next_btn = driver.find_element(By.CSS_SELECTOR, 'input[type="submit"], button[type="submit"]')
-                next_btn.click()
-                human_delay()
-            except TimeoutException as exc:  # noqa: BLE001
-                log_message(f"Failed to locate Outlook email input: {exc}")
-                raise ManualLoginRequired("Unable to locate email input")
-            try:
-                password_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="password"]')))
-                password_input.clear()
-                password_input.send_keys(creds.get("password", ""))
-                human_delay()
-                submit_btn = driver.find_element(By.CSS_SELECTOR, 'input[type="submit"], button[type="submit"]')
-                submit_btn.click()
-                human_delay()
-            except TimeoutException as exc:  # noqa: BLE001
-                log_message(f"Failed to locate Outlook password input: {exc}")
-                raise ManualLoginRequired("Unable to locate password input")
+        creds = self.credential_manager.load_credentials()
+        if not creds:
+            raise ManualLoginRequired("Encrypted Outlook credentials missing.")
+        log_message("Attempting headless login using stored credentials...")
+        driver.get(OUTLOOK_LOGIN_URL)
+        wait = WebDriverWait(driver, 30)
+        try:
+            email_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="email"]')))
+            email_input.clear()
+            email_input.send_keys(creds["username"])
+            human_delay()
+            next_btn = driver.find_element(By.CSS_SELECTOR, 'input[type="submit"], button[type="submit"]')
+            next_btn.click()
+            human_delay()
+        except TimeoutException as exc:  # noqa: BLE001
+            log_message(f"Failed to locate Outlook email input: {exc}")
+            raise ManualLoginRequired("Unable to locate email input")
+        try:
+            password_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="password"]')))
+            password_input.clear()
+            password_input.send_keys(creds["password"])
+            human_delay()
+            submit_btn = driver.find_element(By.CSS_SELECTOR, 'input[type="submit"], button[type="submit"]')
+            submit_btn.click()
+            human_delay()
+        except TimeoutException as exc:  # noqa: BLE001
+            log_message(f"Failed to locate Outlook password input: {exc}")
+            raise ManualLoginRequired("Unable to locate password input")
 
-            time.sleep(5)
-            if self._detect_captcha(driver):
-                raise CaptchaDetected("CAPTCHA or additional verification required")
-            try:
-                stay_signed_in_btn = driver.find_element(By.ID, "idBtn_Back")
-                stay_signed_in_btn.click()
-            except NoSuchElementException:
-                pass
-            time.sleep(5)
-            self.save_cookies(driver)
+        time.sleep(5)
+        if self._detect_captcha(driver):
+            raise CaptchaDetected("CAPTCHA or additional verification required")
+        try:
+            stay_signed_in_btn = driver.find_element(By.ID, "idBtn_Back")
+            stay_signed_in_btn.click()
+        except NoSuchElementException:
+            pass
+        time.sleep(5)
+        self.save_cookies(driver)
 
     def ensure_session(self) -> webdriver.Chrome:
         driver = self._create_driver(headless=True)
@@ -660,13 +559,6 @@ st.set_page_config(
     layout="wide",
 )
 
-if not st.session_state.get("browser_opened_once"):
-    try:
-        webbrowser.open_new("http://localhost:8501")
-    except Exception:  # noqa: BLE001
-        pass
-    st.session_state["browser_opened_once"] = True
-
 st.title("📬 Outlook ➜ Gmail Forwarder")
 st.caption(
     "Automate copying new Outlook emails into Gmail. The UI is optimized to stay idle when unfocused."
@@ -698,12 +590,12 @@ st.session_state["tab_focused"] = is_focused
 with st.expander("Setup checklist", expanded=False):
     st.markdown(
         """
-        1. Install the dependencies outlined in the README (or use the helper above if anything is missing).
-        2. Download your `credentials.json` from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) after enabling the Gmail API.
-        3. Click **Login to Gmail API / Authorize** once to complete OAuth and create `token.json`.
-        4. Provide your Outlook credentials below. They are encrypted immediately and never shown in plaintext again.
-        5. Use **Launch Manual Login** to open Chrome (non-headless), sign in, then click **Save Cookies & Close Browser**.
-        6. Press **Start scanning** to begin the background watcher.
+        1. Install the dependencies listed at the top of this script.
+        2. Download your `credentials.json` from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) for the Gmail API.
+        3. Run `streamlit run app.py`.
+        4. Provide your Outlook credentials below (encrypted with Fernet).
+        5. Click **Launch Manual Login** to open Chrome (non-headless), sign in, then click **Save Cookies**.
+        6. Click **Start scanning** to begin the background watcher.
         """
     )
 
@@ -725,46 +617,27 @@ with col1:
             st.error("Please provide a valid Gmail address.")
 
 with col2:
-    gmail_token_path = Path("token.json")
-    if gmail_token_path.exists():
-        st.success("Gmail API token found. Ready to send messages.")
-    else:
-        st.info("Gmail API token missing. Place `credentials.json` nearby and authorize below.")
-    if st.button("Login to Gmail API / Authorize"):
-        try:
-            AUTOMATION_STATE.gmail_forwarder.authorize()
-            st.success("Gmail API authorized successfully.")
-        except FileNotFoundError:
-            st.error("credentials.json not found. Follow the README Gmail setup steps.")
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Gmail authorization failed: {exc}")
     st.markdown("**Polling interval**: 5-10 minutes (randomized). Human-like delays applied to scraping.")
     st.markdown("**Cookies** stored at: `automation_state/cookies.pkl`")
 
 st.markdown("---")
 
-credentials_available = cred_manager.credentials_stored()
-if credentials_available:
+credentials = cred_manager.load_credentials()
+if credentials:
     st.success("Encrypted Outlook credentials are stored securely. Use the button below to update if needed.")
 else:
     st.warning("Outlook credentials not saved yet. Enter them below and click save.")
 
 with st.form("outlook_credentials_form", clear_on_submit=False):
-    username = st.text_input("Outlook email", key="outlook_username_field")
-    password = st.text_input("Outlook password", type="password", key="outlook_password_field")
+    username = st.text_input("Outlook email", value=credentials.get("username") if credentials else "")
+    password = st.text_input("Outlook password", type="password")
     submitted = st.form_submit_button("Encrypt & Save Outlook credentials")
     if submitted:
         if username and password:
             cred_manager.save_credentials(username, password)
-            st.session_state["outlook_username_field"] = ""
-            st.session_state["outlook_password_field"] = ""
-            st.session_state["outlook_credentials_saved_flag"] = True
-            st.experimental_rerun()
+            st.success("Encrypted credentials saved.")
         else:
             st.error("Both fields are required.")
-
-if st.session_state.pop("outlook_credentials_saved_flag", False):
-    st.success("Encrypted credentials saved.")
 
 col_manual1, col_manual2 = st.columns(2)
 with col_manual1:
