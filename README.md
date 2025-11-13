@@ -2,6 +2,27 @@
 
 Automate copying new Outlook webmail into your primary Gmail account while staying within Outlook's web interface restrictions.
 
+## Manual installation (quick start)
+1. Install Python 3.9 or later. On Windows, either the `python` command or the `py` launcher works.
+2. Install the dependencies listed in `requirements.txt`:
+   ```bash
+   python -m pip install -r requirements.txt
+   ```
+   On Windows you can also use the launcher syntax:
+   ```bash
+   py -3 -m pip install -r requirements.txt
+   ```
+3. Place your `credentials.json` (downloaded from the Google Cloud Console) next to `app.py`.
+4. Launch the Streamlit dashboard:
+   ```bash
+   python -m streamlit run app.py
+   ```
+   or, on Windows:
+   ```bash
+   py -3 -m streamlit run app.py
+   ```
+5. Follow the on-screen prompts to save your Outlook credentials, capture cookies via the manual login flow, and start the background watcher.
+
 ## Features
 - Streamlit dashboard with start/stop controls, focus-aware live logging, and dependency self-checks.
 - Securely encrypted storage of Outlook credentials (Fernet encryption, decrypted only at use time).

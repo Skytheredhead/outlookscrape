@@ -579,7 +579,6 @@ focus_state = components.html(
     </script>
     """,
     height=0,
-    key="focus-detector",
 )
 if focus_state is None:
     is_focused = True
