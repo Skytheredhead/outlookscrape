@@ -12,8 +12,10 @@ Test on a non-production (dummy) account before using with your primary accounts
 """
 import base64
 import json
+import os
 import pickle
 import random
+import shutil
 import threading
 import time
 from collections import deque
@@ -22,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Deque, Dict, List, Optional
+from typing import Deque, Dict, List, Optional, Tuple
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -60,6 +62,11 @@ SETTINGS_PATH = DATA_DIR / "settings.json"
 
 OUTLOOK_LOGIN_URL = "https://outlook.office.com/mail/"
 OUTLOOK_INBOX_URL = "https://outlook.office.com/mail/inbox"
+OUTLOOK_JUNK_URL = "https://outlook.office.com/mail/junkemail"
+OUTLOOK_FOLDERS = [
+    ("Inbox", OUTLOOK_INBOX_URL),
+    ("Junk Email", OUTLOOK_JUNK_URL),
+]
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
@@ -294,7 +301,30 @@ class OutlookAutomation:
         options.add_experimental_option("useAutomationExtension", False)
         if headless:
             options.add_argument("--headless=new")
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        binary_candidates = [
+            os.environ.get("CHROME_BINARY"),
+            os.environ.get("GOOGLE_CHROME_SHIM"),
+            shutil.which("google-chrome"),
+            shutil.which("chrome"),
+            shutil.which("chromium"),
+            shutil.which("chromium-browser"),
+            shutil.which("msedge"),
+            shutil.which("msedge.exe"),
+        ]
+        binary_location = next((candidate for candidate in binary_candidates if candidate), None)
+        if binary_location:
+            options.binary_location = binary_location
+        else:
+            log_message(
+                "Chrome binary not found automatically. Attempting to start ChromeDriver without an explicit binary path."
+            )
+        try:
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        except WebDriverException as exc:
+            raise RuntimeError(
+                "Unable to locate a Chrome or Chromium browser binary. Install Chrome/Chromium or set the CHROME_BINARY "
+                "environment variable to the browser executable before launching the manual login."
+            ) from exc
         driver.set_window_size(1400, 900)
         return driver
 
@@ -347,47 +377,6 @@ class OutlookAutomation:
         keywords = ["captcha", "verify", "identity", "stay signed in", "blocked"]
         return any(keyword in page_text for keyword in keywords)
 
-    def _attempt_headless_login(self, driver: webdriver.Chrome) -> None:
-        creds = self.credential_manager.load_credentials()
-        if not creds:
-            raise ManualLoginRequired("Encrypted Outlook credentials missing.")
-        log_message("Attempting headless login using stored credentials...")
-        driver.get(OUTLOOK_LOGIN_URL)
-        wait = WebDriverWait(driver, 30)
-        try:
-            email_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="email"]')))
-            email_input.clear()
-            email_input.send_keys(creds["username"])
-            human_delay()
-            next_btn = driver.find_element(By.CSS_SELECTOR, 'input[type="submit"], button[type="submit"]')
-            next_btn.click()
-            human_delay()
-        except TimeoutException as exc:  # noqa: BLE001
-            log_message(f"Failed to locate Outlook email input: {exc}")
-            raise ManualLoginRequired("Unable to locate email input")
-        try:
-            password_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="password"]')))
-            password_input.clear()
-            password_input.send_keys(creds["password"])
-            human_delay()
-            submit_btn = driver.find_element(By.CSS_SELECTOR, 'input[type="submit"], button[type="submit"]')
-            submit_btn.click()
-            human_delay()
-        except TimeoutException as exc:  # noqa: BLE001
-            log_message(f"Failed to locate Outlook password input: {exc}")
-            raise ManualLoginRequired("Unable to locate password input")
-
-        time.sleep(5)
-        if self._detect_captcha(driver):
-            raise CaptchaDetected("CAPTCHA or additional verification required")
-        try:
-            stay_signed_in_btn = driver.find_element(By.ID, "idBtn_Back")
-            stay_signed_in_btn.click()
-        except NoSuchElementException:
-            pass
-        time.sleep(5)
-        self.save_cookies(driver)
-
     def ensure_session(self) -> webdriver.Chrome:
         driver = self._create_driver(headless=True)
         try:
@@ -397,69 +386,72 @@ class OutlookAutomation:
                 raise CaptchaDetected("CAPTCHA detected after applying cookies")
             log_message("Authenticated to Outlook using saved cookies.")
             return driver
+        except CaptchaDetected:
+            driver.quit()
+            raise
         except ManualLoginRequired:
             driver.quit()
             raise
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
             driver.quit()
-            driver = self._create_driver(headless=True)
-            try:
-                self._attempt_headless_login(driver)
-                driver.get(OUTLOOK_INBOX_URL)
-                WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[role="main"]')))
-                if self._detect_captcha(driver):
-                    raise CaptchaDetected("CAPTCHA detected post headless login")
-                log_message("Authenticated to Outlook via headless login.")
-                return driver
-            except CaptchaDetected:
-                driver.quit()
-                raise
-            except ManualLoginRequired:
-                driver.quit()
-                raise
-            except Exception as exc:  # noqa: BLE001
-                driver.quit()
-                raise ManualLoginRequired(f"Outlook login failed: {exc}")
+            raise ManualLoginRequired(
+                "Outlook session not authenticated. Launch the manual login window to refresh cookies."
+            ) from exc
 
-    def fetch_new_emails(self, driver: webdriver.Chrome, registry: ForwardedRegistry) -> List[EmailContent]:
+    def fetch_new_emails(
+        self,
+        driver: webdriver.Chrome,
+        registry: ForwardedRegistry,
+        folders: Optional[List[Tuple[str, str]]] = None,
+    ) -> List[EmailContent]:
         wait = WebDriverWait(driver, 30)
-        try:
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="option"]')))
-        except TimeoutException:
-            log_message("Inbox appears empty or failed to load.")
-            return []
-        human_delay()
-        email_rows = driver.find_elements(By.CSS_SELECTOR, 'div[role="option"]')
+        folders_to_check = folders or OUTLOOK_FOLDERS
         new_emails: List[EmailContent] = []
-        for row in email_rows:
-            aria_label = row.get_attribute("aria-label") or ""
-            is_unread = "unread" in (row.get_attribute("class") or "") or "unread" in aria_label.lower()
-            item_id = row.get_attribute("data-itemid") or row.get_attribute("aria-labelledby") or aria_label
-            if not item_id:
-                item_id = str(hash(aria_label + str(time.time())))
-            if registry.has(item_id):
-                continue
-            if not is_unread:
-                continue
+        for folder_name, folder_url in folders_to_check:
             try:
-                ActionChains(driver).move_to_element(row).pause(random.uniform(0.5, 1.2)).click().perform()
+                driver.get(folder_url)
             except WebDriverException as exc:  # noqa: BLE001
-                log_message(f"Failed to select email row: {exc}")
+                log_message(f"Failed to open Outlook folder '{folder_name}': {exc}")
+                continue
+            human_delay(1.0, 2.0)
+            try:
+                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="option"]')))
+            except TimeoutException:
+                log_message(f"{folder_name} appears empty or failed to load.")
                 continue
             human_delay()
-            try:
-                sender_elem = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="main"] span[title]')))
-                subject_elem = driver.find_element(By.CSS_SELECTOR, 'div[role="main"] h1')
-                body_container = driver.find_element(By.CSS_SELECTOR, 'div[role="document"]')
-                sender = sender_elem.text.strip()
-                subject = subject_elem.text.strip()
-                body_html = body_container.get_attribute("innerHTML")
-                body_text = body_container.text
-                new_emails.append(EmailContent(item_id, sender, subject, body_html, body_text))
-                log_message(f"Captured email '{subject}' from {sender}")
-            except NoSuchElementException as exc:
-                log_message(f"Failed to parse email content: {exc}")
-            human_delay(0.5, 1.0)
+            email_rows = driver.find_elements(By.CSS_SELECTOR, 'div[role="option"]')
+            for row in email_rows:
+                aria_label = row.get_attribute("aria-label") or ""
+                is_unread = "unread" in (row.get_attribute("class") or "") or "unread" in aria_label.lower()
+                item_id = row.get_attribute("data-itemid") or row.get_attribute("aria-labelledby") or aria_label
+                if not item_id:
+                    item_id = str(hash(aria_label + str(time.time())))
+                if registry.has(item_id):
+                    continue
+                if not is_unread:
+                    continue
+                try:
+                    ActionChains(driver).move_to_element(row).pause(random.uniform(0.5, 1.2)).click().perform()
+                except WebDriverException as exc:  # noqa: BLE001
+                    log_message(f"Failed to select email row in {folder_name}: {exc}")
+                    continue
+                human_delay()
+                try:
+                    sender_elem = wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="main"] span[title]'))
+                    )
+                    subject_elem = driver.find_element(By.CSS_SELECTOR, 'div[role="main"] h1')
+                    body_container = driver.find_element(By.CSS_SELECTOR, 'div[role="document"]')
+                    sender = sender_elem.text.strip()
+                    subject = subject_elem.text.strip()
+                    body_html = body_container.get_attribute("innerHTML")
+                    body_text = body_container.text
+                    new_emails.append(EmailContent(item_id, sender, subject, body_html, body_text))
+                    log_message(f"Captured email '{subject}' from {sender} in {folder_name}")
+                except NoSuchElementException as exc:
+                    log_message(f"Failed to parse email content in {folder_name}: {exc}")
+                human_delay(0.5, 1.0)
         return new_emails
 
 
