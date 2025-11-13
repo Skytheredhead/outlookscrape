@@ -15,17 +15,13 @@ Automate copying new Outlook webmail into your primary Gmail account while stayi
 - Chrome browser installed (ChromeDriver is downloaded automatically via `webdriver-manager`).
 
 ## Installation
-Install the required Python packages before running the app. The Windows-friendly command is:
-
-```powershell
-py -m pip install selenium webdriver-manager google-api-python-client google-auth-httplib2 google-auth-oauthlib cryptography streamlit python-dateutil
-```
-
-On other platforms, replace `py -m pip` with your Python executable, for example:
+Install the required Python packages before running the app. The easiest cross-platform command is:
 
 ```bash
-python -m pip install selenium webdriver-manager google-api-python-client google-auth-httplib2 google-auth-oauthlib cryptography streamlit python-dateutil
+python -m pip install -r requirements.txt
 ```
+
+On Windows you can replace `python` with `py -3` if you prefer the Python launcher.
 
 ## Gmail API setup
 1. Visit the [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
