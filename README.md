@@ -15,17 +15,13 @@ Automate copying new Outlook webmail into your primary Gmail account while stayi
 - Chrome browser installed (ChromeDriver is downloaded automatically via `webdriver-manager`).
 
 ## Installation
-Install the required Python packages before running the app. The Windows-friendly command is:
-
-```powershell
-py -m pip install selenium webdriver-manager google-api-python-client google-auth-httplib2 google-auth-oauthlib cryptography streamlit python-dateutil
-```
-
-On other platforms, replace `py -m pip` with your Python executable, for example:
+Install the required Python packages before running the app. The easiest cross-platform command is:
 
 ```bash
-python -m pip install selenium webdriver-manager google-api-python-client google-auth-httplib2 google-auth-oauthlib cryptography streamlit python-dateutil
+python -m pip install -r requirements.txt
 ```
+
+On Windows you can replace `python` with `py -3`, `py`, or whichever Python command you normally use.
 
 ## Gmail API setup
 1. Visit the [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
@@ -35,11 +31,23 @@ python -m pip install selenium webdriver-manager google-api-python-client google
 5. The Streamlit UI provides a **Login to Gmail API** button to launch the OAuth consent screen. The resulting `token.json` is stored locally for reuse.
 
 ## Running the dashboard
-1. Ensure the dependencies above are installed.
-2. Place `credentials.json` next to `app.py`.
-3. Launch the UI:
+
+### Windows one-click launcher
+1. Double-click `run_app.bat`.
+2. The script verifies that the required Python packages (listed in `requirements.txt`) are installed. If any are missing it attempts to download them using whichever Python command works first out of `py -3`, `py`, `python`, or `python3`.
+3. If the automatic install cannot run (for example because `pip` is unavailable) the launcher still tries to open the app so you can continue when the packages are already present. When Streamlit cannot start it will prompt you to install the requirements manually with the exact Python command it detected.
+4. Once the dependencies are ready, the Streamlit dashboard starts in the same window and opens your browser to `http://localhost:8501`.
+5. Keep the Command Prompt window open while you use the tool. Close it to stop the server.
+
+### Manual launch (any platform)
+1. Ensure the dependencies above are installed. You can use the provided `requirements.txt` file:
    ```bash
-   streamlit run app.py
+   python -m pip install -r requirements.txt
+   ```
+2. Place `credentials.json` next to `app.py`.
+3. Start the UI with:
+   ```bash
+   python -m streamlit run app.py
    ```
 4. The dashboard will automatically open in your default browser at `http://localhost:8501`.
 5. Enter your Outlook username and password once via the UI to encrypt and save them. The plaintext values are discarded immediately after encryption.
