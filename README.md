@@ -35,11 +35,22 @@ python -m pip install selenium webdriver-manager google-api-python-client google
 5. The Streamlit UI provides a **Login to Gmail API** button to launch the OAuth consent screen. The resulting `token.json` is stored locally for reuse.
 
 ## Running the dashboard
-1. Ensure the dependencies above are installed.
-2. Place `credentials.json` next to `app.py`.
-3. Launch the UI:
+
+### Windows one-click launcher
+1. Double-click `run_app.bat`.
+2. The script automatically installs/updates the required Python packages (listed in `requirements.txt`) using the `py` launcher if available, or the `python` command otherwise.
+3. Once the dependencies are ready, the Streamlit dashboard starts in the same window and opens your browser to `http://localhost:8501`.
+4. Keep the Command Prompt window open while you use the tool. Close it to stop the server.
+
+### Manual launch (any platform)
+1. Ensure the dependencies above are installed. You can use the provided `requirements.txt` file:
    ```bash
-   streamlit run app.py
+   python -m pip install -r requirements.txt
+   ```
+2. Place `credentials.json` next to `app.py`.
+3. Start the UI with:
+   ```bash
+   python -m streamlit run app.py
    ```
 4. The dashboard will automatically open in your default browser at `http://localhost:8501`.
 5. Enter your Outlook username and password once via the UI to encrypt and save them. The plaintext values are discarded immediately after encryption.
