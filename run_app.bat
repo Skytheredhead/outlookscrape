@@ -20,22 +20,15 @@ if %errorlevel%==0 (
     )
 )
 
-echo Checking required Python packages...
-"!PYTHON!" "%~dp0check_dependencies.py" --quiet
-if %errorlevel%==0 goto launch_ready
-
-echo Missing packages detected. Attempting installation (internet access required)...
+echo Ensuring required Python packages are installed...
+"!PYTHON!" -m pip install --upgrade pip >nul
+if %errorlevel% neq 0 goto pip_fail
 "!PYTHON!" -m pip install --disable-pip-version-check --no-warn-script-location -r requirements.txt
 if %errorlevel% neq 0 goto pip_fail
 
-"!PYTHON!" "%~dp0check_dependencies.py" --quiet
-if %errorlevel% neq 0 goto missing_after_install
-
-:launch_ready
 echo.
 echo Launching the Outlook to Gmail Forwarder dashboard.
 echo Close this window to stop the server when you are done.
-:launch
 "!PYTHON!" -m streamlit run app.py
 if %errorlevel% neq 0 goto streamlit_fail
 exit /b 0
@@ -43,17 +36,6 @@ exit /b 0
 :pip_fail
 echo.
 echo Failed to install the Python dependencies. Check your internet connection and try again.
-echo You can also install them manually by running:
-echo     python -m pip install -r requirements.txt
-pause
-exit /b 1
-
-:missing_after_install
-echo.
-echo The launcher could not verify that the required packages are installed.
-echo Run the following command in this folder and check for errors:
-echo     python -m pip install -r requirements.txt
-echo After it succeeds, double-click run_app.bat again.
 pause
 exit /b 1
 

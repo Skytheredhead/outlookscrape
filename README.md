@@ -34,7 +34,7 @@ On Windows you can replace `python` with `py -3` if you prefer the Python launch
 
 ### Windows one-click launcher
 1. Double-click `run_app.bat`.
-2. The script verifies that the required Python packages (listed in `requirements.txt`) are installed. If any are missing it attempts to download them using the `py` launcher if available, or the `python` command otherwise.
+2. The script automatically installs/updates the required Python packages (listed in `requirements.txt`) using the `py` launcher if available, or the `python` command otherwise.
 3. Once the dependencies are ready, the Streamlit dashboard starts in the same window and opens your browser to `http://localhost:8501`.
 4. Keep the Command Prompt window open while you use the tool. Close it to stop the server.
 
