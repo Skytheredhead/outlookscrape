@@ -462,14 +462,38 @@ class OutlookAutomation:
             MANUAL_LOGIN_EVENT.clear()
 
     def _detect_captcha(self, driver: webdriver.Chrome) -> bool:
+        """Detect whether Outlook is presenting a bot or verification challenge."""
+
         page_text = driver.page_source.lower()
-        keywords = ["captcha", "verify", "identity", "stay signed in", "blocked"]
-        return any(keyword in page_text for keyword in keywords)
+        title = (driver.title or "").lower()
+        captcha_keywords = ["captcha", "enter the characters you see", "verification challenge"]
+        alert_phrases = [
+            "help us protect your account",
+            "verify your identity",
+            "unusual activity",
+        ]
+        if any(keyword in page_text or keyword in title for keyword in captcha_keywords):
+            return True
+        return any(phrase in page_text for phrase in alert_phrases)
+
+    def _is_login_page(self, driver: webdriver.Chrome) -> bool:
+        url = (driver.current_url or "").lower()
+        if any(domain in url for domain in ("login.live.com", "login.microsoftonline.com")):
+            return True
+        try:
+            driver.find_element(By.CSS_SELECTOR, "input[name='loginfmt']")
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def ensure_session(self) -> webdriver.Chrome:
         driver = self._create_driver(headless=False, use_profile=True)
         try:
             driver.get(OUTLOOK_INBOX_URL)
+            if self._is_login_page(driver):
+                raise ManualLoginRequired(
+                    "Outlook asked for login again. Launch the manual login window to refresh the saved session."
+                )
             WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[role="main"]')))
             if self._detect_captcha(driver):
                 raise CaptchaDetected("CAPTCHA detected after loading the Outlook profile")
@@ -914,7 +938,6 @@ if (
         </script>
         """,
         height=0,
-        key="log-refresh",
     )
 
 if st.button("Refresh logs", help="Manual refresh to keep resource usage low when unfocused."):
