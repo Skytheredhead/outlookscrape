@@ -21,12 +21,12 @@ Automate copying new Outlook webmail into your primary Gmail account while stayi
    ```bash
    py -3 -m streamlit run app.py
    ```
-5. Follow the on-screen prompts to save your Outlook credentials, capture cookies via the manual login flow, and start the background watcher.
+5. Follow the on-screen prompts to save your Outlook credentials, create the persistent Outlook browser profile via the manual login flow, and start the background watcher.
 
 ## Features
 - Streamlit dashboard with start/stop controls, focus-aware live logging, and dependency self-checks.
 - Securely encrypted storage of Outlook credentials (Fernet encryption, decrypted only at use time).
-- Manual and headless Selenium sessions with cookie reuse and CAPTCHA detection.
+- Manual and headless Selenium sessions backed by a persistent Chrome profile to minimize CAPTCHAs.
 - Gmail API integration for forwarding and alert notifications.
 - Human-like polling cadence, cooldowns on failure, and persistent forwarding history.
 
@@ -51,6 +51,13 @@ On Windows you can replace `python` with `py -3` if you prefer the Python launch
 4. Download the `credentials.json` file and place it in the same directory as `app.py`.
 5. The Streamlit UI provides a **Login to Gmail API** button to launch the OAuth consent screen. The resulting `token.json` is stored locally for reuse.
 
+If you see `Error 403: access_denied` while authorizing Gmail sending access:
+
+1. Open the [Google Cloud Console OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent).
+2. Scroll to the **Test users** section.
+3. Click **Add users**, enter the Gmail address you are using for sending, and click **Save**.
+4. Retry the Gmail OAuth flow from the app.
+
 ## Running the dashboard
 
 ### Windows one-click launcher
@@ -71,7 +78,7 @@ On Windows you can replace `python` with `py -3` if you prefer the Python launch
    ```
 4. The dashboard will automatically open in your default browser at `http://localhost:8501`.
 5. Enter your Outlook username and password once via the UI to encrypt and save them. The plaintext values are discarded immediately after encryption.
-6. Use **Launch Manual Login** to open a non-headless Chrome window, sign into Outlook manually, then click **Save Cookies & Close Browser**.
+6. Use **Launch Manual Login** to open a non-headless Chrome window, sign into Outlook manually, then click **Save & Close (Persist Login)** to store the profile.
 7. Press **Start scanning** to begin forwarding unread Outlook emails to the Gmail address you saved in settings.
 
 ## Notes

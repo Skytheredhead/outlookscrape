@@ -13,7 +13,6 @@ Test on a non-production (dummy) account before using with your primary accounts
 import base64
 import json
 import os
-import pickle
 import random
 import shutil
 import threading
@@ -53,7 +52,8 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "automation_state"
 DATA_DIR.mkdir(exist_ok=True)
 
-COOKIES_PATH = DATA_DIR / "cookies.pkl"
+CHROME_PROFILE_DIR = DATA_DIR / "chrome_profile"
+PROFILE_READY_PATH = DATA_DIR / "profile_ready.txt"
 FERNET_KEY_PATH = DATA_DIR / "fernet.key"
 ENCRYPTED_CREDENTIALS_PATH = DATA_DIR / "outlook.enc"
 FORWARDED_LOG_PATH = DATA_DIR / "forwarded.json"
@@ -359,8 +359,7 @@ class OutlookAutomation:
     def __init__(self, credential_manager: CredentialManager):
         self.credential_manager = credential_manager
 
-    @staticmethod
-    def _create_driver(headless: bool = True) -> webdriver.Chrome:
+    def _create_driver(self, headless: bool = True, use_profile: bool = False) -> webdriver.Chrome:
         options = Options()
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--disable-extensions")
@@ -369,6 +368,10 @@ class OutlookAutomation:
         options.add_argument("--lang=en-US")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
+        if use_profile:
+            CHROME_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            options.add_argument(f"--user-data-dir={CHROME_PROFILE_DIR}")
+            options.add_argument("--profile-directory=Default")
         if headless:
             options.add_argument("--headless=new")
         binary_candidates = [
@@ -407,25 +410,12 @@ class OutlookAutomation:
         driver.set_window_size(1400, 900)
         return driver
 
-    def _apply_cookies(self, driver: webdriver.Chrome) -> None:
-        if not COOKIES_PATH.exists():
-            raise ManualLoginRequired("Cookie file not found")
-        with COOKIES_PATH.open("rb") as file:
-            cookies = pickle.load(file)
-        driver.get("https://outlook.office.com")
-        for cookie in cookies:
-            cookie_dict = {k: v for k, v in cookie.items() if k in {"name", "value", "domain", "path", "expiry", "secure", "httpOnly"}}
-            try:
-                driver.add_cookie(cookie_dict)
-            except Exception:  # noqa: BLE001
-                continue
-        driver.get(OUTLOOK_INBOX_URL)
-
-    def save_cookies(self, driver: webdriver.Chrome) -> None:
-        cookies = driver.get_cookies()
-        with COOKIES_PATH.open("wb") as file:
-            pickle.dump(cookies, file)
-        log_message("Saved Outlook cookies to disk.")
+    def profile_ready(self) -> bool:
+        if not PROFILE_READY_PATH.exists():
+            return False
+        if not CHROME_PROFILE_DIR.exists():
+            return False
+        return any(CHROME_PROFILE_DIR.iterdir())
 
     def launch_manual_login(self) -> None:
         existing_driver = MANUAL_DRIVER_HOLDER.get("driver") or st.session_state.get("manual_driver")
@@ -433,10 +423,12 @@ class OutlookAutomation:
             MANUAL_DRIVER_HOLDER["driver"] = existing_driver
             log_message("Manual login window already open.")
             return
-        driver = self._create_driver(headless=False)
+        driver = self._create_driver(headless=False, use_profile=True)
         MANUAL_DRIVER_HOLDER["driver"] = driver
         st.session_state["manual_driver"] = driver
-        log_message("Manual Chrome window launched. Complete login and then click 'Save cookies'.")
+        log_message(
+            "Manual Chrome window launched with a persistent profile. Log in, solve any prompts, and then click 'Save & Close'."
+        )
         driver.get(OUTLOOK_LOGIN_URL)
 
     def complete_manual_login(self) -> None:
@@ -444,8 +436,21 @@ class OutlookAutomation:
         if not driver:
             log_message("No manual Chrome session is active.")
             return
+        profile_saved = False
         try:
-            self.save_cookies(driver)
+            try:
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, '[role="main"]'))
+                )
+            except TimeoutException as exc:
+                raise RuntimeError(
+                    "Outlook web app not detected yet. Finish the login process before saving the session."
+                ) from exc
+            PROFILE_READY_PATH.write_text(datetime.now().isoformat())
+            log_message(
+                "Saved persistent Outlook session. Future automation runs will reuse this browser profile."
+            )
+            profile_saved = True
         finally:
             try:
                 driver.quit()
@@ -453,7 +458,8 @@ class OutlookAutomation:
                 pass
             MANUAL_DRIVER_HOLDER["driver"] = None
             st.session_state.pop("manual_driver", None)
-        MANUAL_LOGIN_EVENT.clear()
+        if profile_saved:
+            MANUAL_LOGIN_EVENT.clear()
 
     def _detect_captcha(self, driver: webdriver.Chrome) -> bool:
         page_text = driver.page_source.lower()
@@ -461,13 +467,13 @@ class OutlookAutomation:
         return any(keyword in page_text for keyword in keywords)
 
     def ensure_session(self) -> webdriver.Chrome:
-        driver = self._create_driver(headless=True)
+        driver = self._create_driver(headless=False, use_profile=True)
         try:
-            self._apply_cookies(driver)
+            driver.get(OUTLOOK_INBOX_URL)
             WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[role="main"]')))
             if self._detect_captcha(driver):
-                raise CaptchaDetected("CAPTCHA detected after applying cookies")
-            log_message("Authenticated to Outlook using saved cookies.")
+                raise CaptchaDetected("CAPTCHA detected after loading the Outlook profile")
+            log_message("Authenticated to Outlook using the persistent browser profile.")
             return driver
         except CaptchaDetected:
             driver.quit()
@@ -478,7 +484,7 @@ class OutlookAutomation:
         except Exception as exc:  # noqa: BLE001
             driver.quit()
             raise ManualLoginRequired(
-                "Outlook session not authenticated. Launch the manual login window to refresh cookies."
+                "Outlook session not authenticated. Launch the manual login window to refresh the Outlook profile."
             ) from exc
 
     def fetch_new_emails(
@@ -570,8 +576,8 @@ def worker_loop(stop_event: threading.Event, manual_event: threading.Event) -> N
         log_message("Target Gmail address not set. Stopping worker.")
         AUTOMATION_STATE.running = False
         return
-    if not COOKIES_PATH.exists():
-        log_message("Cookie file missing. Launch manual login and save cookies before starting automation.")
+    if not outlook.profile_ready():
+        log_message("Outlook profile not ready. Launch manual login and save the session before starting automation.")
         manual_event.set()
         AUTOMATION_STATE.running = False
         return
@@ -640,14 +646,14 @@ def run_single_check() -> Tuple[bool, str]:
     target_email = settings.get("target_email")
     if not target_email:
         return False, "Please save your target Gmail address first."
-    if not COOKIES_PATH.exists():
+    outlook = AUTOMATION_STATE.outlook
+    if not outlook.profile_ready():
         MANUAL_LOGIN_EVENT.set()
-        return False, "Cookies not found. Launch the manual login, save cookies, and try again."
+        return False, "Outlook profile not found. Launch the manual login, save the session, and try again."
 
     registry = AUTOMATION_STATE.registry
     counter = AUTOMATION_STATE.counter
     gmail = AUTOMATION_STATE.gmail_forwarder
-    outlook = AUTOMATION_STATE.outlook
 
     log_message("Manual check triggered from the UI.")
     driver: Optional[webdriver.Chrome] = None
@@ -758,7 +764,7 @@ with st.expander("Setup checklist", expanded=False):
         2. Download your `credentials.json` (or the `client_secret_*.apps.googleusercontent.com.json` file) from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) for the Gmail API and place it alongside this script.
         3. Run `streamlit run app.py`.
         4. Provide your Outlook credentials below (encrypted with Fernet).
-        5. Click **Launch Manual Login** to open Chrome (non-headless), sign in, then click **Save Cookies**.
+        5. Click **Launch Manual Login** to open Chrome (non-headless), sign in, then click **Save & Close** to persist the profile.
         6. Click **Start scanning** to begin the background watcher.
         """
     )
@@ -793,7 +799,7 @@ with col1:
 
 with col2:
     st.markdown("**Polling interval**: 5-10 minutes (randomized). Human-like delays applied to scraping.")
-    st.markdown("**Cookies** stored at: `automation_state/cookies.pkl`")
+    st.markdown("Persistent Outlook profile stored in: `automation_state/chrome_profile/`")
 
 st.markdown("---")
 
@@ -822,15 +828,15 @@ with col_manual1:
         except Exception as exc:  # noqa: BLE001
             st.error(f"Failed to launch manual login: {exc}")
 with col_manual2:
-    if st.button("Save Cookies & Close Browser"):
+    if st.button("Save & Close (Persist Login)"):
         try:
             AUTOMATION_STATE.outlook.complete_manual_login()
-            st.success("Cookies saved. You can now run in headless mode.")
+            st.success("Outlook profile saved. Future runs will reuse this login.")
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Failed to save cookies: {exc}")
+            st.error(f"Failed to persist profile: {exc}")
 
 if MANUAL_LOGIN_EVENT.is_set():
-    st.error("Manual login required. Launch the manual window, sign in, and save cookies.")
+    st.error("Manual login required. Launch the manual window, sign in, and save the profile.")
 
 st.markdown("---")
 
@@ -850,9 +856,9 @@ with start_col:
     if st.button("▶️ Start scanning", disabled=AUTOMATION_STATE.running):
         if not settings_manager.get("target_email"):
             st.error("Please save your target Gmail address first.")
-        elif not COOKIES_PATH.exists():
+        elif not AUTOMATION_STATE.outlook.profile_ready():
             MANUAL_LOGIN_EVENT.set()
-            st.error("Cookies not found. Launch the manual login window and save cookies before starting.")
+            st.error("Outlook profile not found. Launch the manual login window and save the session before starting.")
         else:
             STOP_EVENT.clear()
             MANUAL_LOGIN_EVENT.clear()
@@ -877,9 +883,9 @@ with stop_col:
 
 with check_col:
     if st.button("🔍 Run a check", disabled=AUTOMATION_STATE.running):
-        if not COOKIES_PATH.exists():
+        if not AUTOMATION_STATE.outlook.profile_ready():
             MANUAL_LOGIN_EVENT.set()
-            st.error("Cookies not found. Launch the manual login window and save cookies before running a check.")
+            st.error("Outlook profile not found. Launch the manual login window and save the session before running a check.")
         else:
             success, message = run_single_check()
             if success:
