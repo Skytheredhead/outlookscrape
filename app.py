@@ -85,8 +85,16 @@ if "STOP_EVENT" not in globals():
     STOP_EVENT = threading.Event()
 if "WORKER_THREAD" not in globals():
     WORKER_THREAD: Optional[threading.Thread] = None
-if "MANUAL_DRIVER_HOLDER" not in globals():
-    MANUAL_DRIVER_HOLDER: Dict[str, Optional[webdriver.Chrome]] = {"driver": None}
+
+try:
+    session_holder = st.session_state
+except RuntimeError:
+    if "MANUAL_DRIVER_HOLDER" not in globals():
+        MANUAL_DRIVER_HOLDER: Dict[str, Optional[webdriver.Chrome]] = {"driver": None}
+else:
+    if "MANUAL_DRIVER_HOLDER" not in session_holder:
+        session_holder["MANUAL_DRIVER_HOLDER"] = {"driver": None}
+    MANUAL_DRIVER_HOLDER = session_holder["MANUAL_DRIVER_HOLDER"]
 
 if "LOG_BUFFER" not in globals():
     LOG_BUFFER: Deque[str] = deque(maxlen=500)
@@ -389,10 +397,18 @@ class OutlookAutomation:
         try:
             driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
         except WebDriverException as exc:
-            raise RuntimeError(
-                "Unable to locate a Chrome or Chromium browser binary. Install Chrome/Chromium or set the CHROME_BINARY "
-                "environment variable to the browser executable before launching the manual login."
-            ) from exc
+            message = str(exc)
+            lowered = message.lower()
+            if "user data directory is already in use" in lowered:
+                raise RuntimeError(
+                    "Chrome profile already in use. Close other Chrome windows that use this profile and try again."
+                ) from exc
+            if "cannot find chrome binary" in lowered or "chrome binary" in lowered:
+                raise RuntimeError(
+                    "Unable to locate a Chrome or Chromium browser binary. Install Chrome/Chromium or set the CHROME_BINARY "
+                    "environment variable to the browser executable before launching the manual login."
+                ) from exc
+            raise RuntimeError(f"Unable to start Chrome: {message}") from exc
         driver.set_window_size(1400, 900)
         return driver
 
@@ -818,129 +834,199 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     :root {
         color-scheme: dark;
         --accent: #38bdf8;
         --accent-strong: #6366f1;
+        --accent-glow: rgba(56, 189, 248, 0.45);
+        --surface: rgba(15, 23, 42, 0.78);
+        --surface-strong: rgba(15, 23, 42, 0.92);
     }
     html, body, .stApp, [data-testid="stAppViewContainer"] {
         background-color: #000000 !important;
+        font-family: 'Inter', sans-serif;
     }
     div[data-testid="stAppViewContainer"] > .main {
-        background: radial-gradient(circle at top, rgba(99, 102, 241, 0.18), transparent 55%), #000000;
+        position: relative;
+        background: radial-gradient(circle at top, rgba(59, 130, 246, 0.18), transparent 55%), #000000;
         color: #e2e8f0;
         padding-top: 0.5rem;
     }
+    div[data-testid="stAppViewContainer"] > .main::before,
+    div[data-testid="stAppViewContainer"] > .main::after {
+        content: "";
+        position: fixed;
+        width: 60vw;
+        height: 60vw;
+        border-radius: 50%;
+        filter: blur(140px);
+        opacity: 0.55;
+        z-index: 0;
+        pointer-events: none;
+        transition: opacity 0.6s ease;
+    }
+    div[data-testid="stAppViewContainer"] > .main::before {
+        top: -18vw;
+        right: -22vw;
+        background: radial-gradient(circle, rgba(99, 102, 241, 0.65), transparent 60%);
+    }
+    div[data-testid="stAppViewContainer"] > .main::after {
+        bottom: -24vw;
+        left: -18vw;
+        background: radial-gradient(circle, rgba(56, 189, 248, 0.6), transparent 60%);
+    }
     div.block-container {
         padding-top: 0.7rem;
-        padding-bottom: 2rem;
-        max-width: 1120px;
+        padding-bottom: 2.4rem;
+        max-width: 1140px;
+        position: relative;
+        z-index: 1;
     }
     div[data-testid="stHeader"] {background: transparent;}
     .page-title {
-        font-size: 1.9rem;
-        font-weight: 700;
-        color: #f9fafb;
-        margin-bottom: 0.1rem;
+        font-size: 2rem;
+        font-weight: 800;
+        color: #f8fafc;
+        margin-bottom: 0.12rem;
+        letter-spacing: -0.01em;
     }
     .page-subtitle {
         color: #94a3b8;
-        font-size: 0.95rem;
-        margin-bottom: 0.9rem;
+        font-size: 1rem;
+        margin-bottom: 1.1rem;
     }
     .card {
-        background: rgba(15, 23, 42, 0.9);
-        border-radius: 0.9rem;
-        padding: 0.9rem 1.1rem;
-        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.55);
-        margin-bottom: 0.9rem;
-        border: 1px solid rgba(148, 163, 184, 0.17);
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.82), rgba(15, 23, 42, 0.92));
+        border-radius: 1rem;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 22px 48px rgba(2, 6, 23, 0.65);
+        margin-bottom: 1rem;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        backdrop-filter: blur(16px);
+    }
+    .card:hover {
+        border-color: rgba(148, 163, 184, 0.35);
+        box-shadow: 0 28px 60px rgba(59, 130, 246, 0.18);
+        transition: box-shadow 0.3s ease, border-color 0.3s ease;
     }
     .section-title {
-        font-size: 0.9rem;
+        font-size: 0.85rem;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.14em;
         color: #bae6fd;
-        margin-bottom: 0.45rem;
+        margin-bottom: 0.55rem;
+        font-weight: 600;
     }
     .stButton>button {
-        background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+        background: linear-gradient(135deg, rgba(56, 189, 248, 0.92) 0%, rgba(99, 102, 241, 0.96) 100%);
         color: #020617;
-        border-radius: 0.7rem;
+        border-radius: 0.75rem;
         border: none;
         font-weight: 600;
-        font-size: 0.9rem;
-        padding: 0.45rem 0.9rem;
-        transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
-        box-shadow: 0 10px 24px rgba(56, 189, 248, 0.38);
+        font-size: 0.92rem;
+        padding: 0.5rem 0.95rem;
+        transition: transform 0.18s ease, filter 0.18s ease, box-shadow 0.18s ease;
+        box-shadow: 0 16px 36px rgba(56, 189, 248, 0.4);
     }
     .stButton>button:disabled {
-        background: rgba(30, 41, 59, 0.9);
+        background: rgba(30, 41, 59, 0.85);
         color: #64748b;
         box-shadow: none;
     }
     .stButton>button:not(:disabled):hover {
-        transform: translateY(-1px);
-        filter: brightness(1.05);
+        transform: translateY(-2px) scale(1.01);
+        filter: brightness(1.07);
     }
     .stButton>button:not(:disabled):active {
         transform: translateY(0);
+        filter: brightness(0.96);
     }
     div[data-baseweb="input"] input {
-        background: rgba(15, 23, 42, 0.85);
-        border-radius: 0.65rem !important;
-        border: 1px solid rgba(148, 163, 184, 0.4);
+        background: var(--surface);
+        border-radius: 0.7rem !important;
+        border: 1px solid rgba(148, 163, 184, 0.45);
         color: #e2e8f0 !important;
-        padding: 0.48rem 0.85rem !important;
-        font-size: 0.9rem !important;
+        padding: 0.5rem 0.9rem !important;
+        font-size: 0.92rem !important;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    div[data-baseweb="input"] input:focus {
+        border-color: rgba(94, 234, 212, 0.8);
+        box-shadow: 0 0 0 2px rgba(94, 234, 212, 0.35);
     }
     div[data-baseweb="input"] input::placeholder {
-        color: #64748b;
+        color: rgba(148, 163, 184, 0.7);
     }
     div[data-baseweb="slider"] {
-        padding: 0.25rem 0.35rem 0.1rem;
+        padding: 0.25rem 0.4rem 0.1rem;
+    }
+    div[data-baseweb="slider"] [role="slider"] {
+        background: linear-gradient(135deg, rgba(56, 189, 248, 1) 0%, rgba(99, 102, 241, 1) 100%) !important;
+        box-shadow: 0 10px 20px rgba(56, 189, 248, 0.35);
+    }
+    div[data-baseweb="slider"] > div > div {
+        background: rgba(56, 189, 248, 0.35) !important;
     }
     .small-note {
-        font-size: 0.78rem;
-        color: #94a3b8;
-        margin-top: 0.25rem;
+        font-size: 0.8rem;
+        color: rgba(148, 163, 184, 0.95);
+        margin-top: 0.3rem;
     }
     .pill {
         display: inline-flex;
         align-items: center;
         gap: 0.35rem;
-        background: rgba(15, 23, 42, 0.95);
+        background: rgba(15, 23, 42, 0.94);
         border: 1px solid rgba(148, 163, 184, 0.6);
         color: #e5e7eb;
         border-radius: 999px;
-        padding: 0.16rem 0.75rem;
-        font-size: 0.75rem;
+        padding: 0.18rem 0.75rem;
+        font-size: 0.78rem;
         font-weight: 600;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.06em;
         text-transform: uppercase;
     }
     div[data-testid="stMetric"] {
-        background: rgba(15, 23, 42, 0.88);
-        border-radius: 0.75rem;
+        background: linear-gradient(135deg, rgba(17, 24, 39, 0.88), rgba(30, 41, 59, 0.9));
+        border-radius: 0.85rem;
         border: 1px solid rgba(51, 65, 85, 0.9);
-        padding: 0.3rem 0.55rem;
+        padding: 0.35rem 0.6rem;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
     div[data-testid="stMetricLabel"] > div {
         color: #9ca3af;
-        font-size: 0.75rem;
-        letter-spacing: 0.08em;
+        font-size: 0.76rem;
+        letter-spacing: 0.1em;
     }
     div[data-testid="stMetricValue"] > div {
         color: #f9fafb;
-        font-size: 1.35rem;
+        font-size: 1.38rem;
         font-weight: 700;
     }
-    pre, code {
-        background-color: rgba(15, 23, 42, 0.95) !important;
+    .stCheckbox label {
         color: #e2e8f0 !important;
+        font-size: 0.85rem !important;
+    }
+    pre, code {
+        background-color: rgba(15, 23, 42, 0.96) !important;
+        color: #e2e8f0 !important;
+        border-radius: 0.75rem;
+        padding: 0.9rem !important;
+        box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.6);
+    }
+    .stExpander {
+        border-radius: 0.9rem !important;
+        overflow: hidden;
+        border: 1px solid rgba(148, 163, 184, 0.2) !important;
+        background: rgba(15, 23, 42, 0.9);
+    }
+    .stExpander > div {
+        background: transparent !important;
     }
     a, .stMarkdown a {
         color: #38bdf8;
+        font-weight: 600;
     }
     </style>
     """,
