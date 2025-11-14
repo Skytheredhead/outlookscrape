@@ -18,7 +18,6 @@ REQUIRED_MODULES: Tuple[Tuple[str, str], ...] = (
     ("google-api-python-client", "googleapiclient"),
     ("google-auth-httplib2", "google_auth_httplib2"),
     ("google-auth-oauthlib", "google_auth_oauthlib"),
-    ("cryptography", "cryptography"),
     ("streamlit", "streamlit"),
     ("python-dateutil", "dateutil"),
 )
