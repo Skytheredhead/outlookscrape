@@ -120,6 +120,10 @@ class ManualLoginRequired(Exception):
     """Raised when a manual login is required."""
 
 
+class ManualLoginPending(ManualLoginRequired):
+    """Raised when automation is waiting for the user to finish logging in."""
+
+
 class CaptchaDetected(Exception):
     """Raised when Outlook displays a CAPTCHA or block."""
 
@@ -463,14 +467,14 @@ class OutlookAutomation:
         driver = self._get_existing_driver()
         if not driver:
             self.launch_manual_login(auto_open=True)
-            raise ManualLoginRequired(
-                "Outlook window opened automatically. Complete the login flow and click 'Save session' before starting automation."
+            raise ManualLoginPending(
+                "Outlook window opened automatically. Waiting for you to finish signing in."
             )
         try:
             driver.get(OUTLOOK_INBOX_URL)
             if self._is_login_page(driver):
-                raise ManualLoginRequired(
-                    "Outlook asked for login again. Launch the manual login window to refresh the saved session."
+                raise ManualLoginPending(
+                    "Outlook is prompting for a login. Complete the sign-in flow in the open window."
                 )
             WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, '[role="main"]')))
             if self._detect_captcha(driver):
@@ -617,6 +621,10 @@ def worker_loop(stop_event: threading.Event, manual_event: threading.Event) -> N
             else:
                 log_message("No new unread emails detected.")
             AUTOMATION_STATE.last_run = datetime.now().astimezone(tz.tzlocal()).strftime("%Y-%m-%d %H:%M:%S %Z")
+        except ManualLoginPending as exc:
+            manual_event.set()
+            log_message(f"Waiting for manual login: {exc}")
+            AUTOMATION_STATE.cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=30)
         except ManualLoginRequired as exc:
             manual_event.set()
             log_message(f"Manual login required: {exc}")
@@ -686,6 +694,10 @@ def run_single_check() -> Tuple[bool, str]:
         AUTOMATION_STATE.last_run = datetime.now().astimezone(tz.tzlocal()).strftime("%Y-%m-%d %H:%M:%S %Z")
         AUTOMATION_STATE.cooldown_until = None
         return True, message
+    except ManualLoginPending as exc:
+        MANUAL_LOGIN_EVENT.set()
+        log_message(f"Manual check waiting for login: {exc}")
+        return False, "Manual login in progress. Complete the Outlook sign-in window and try again."
     except ManualLoginRequired as exc:
         MANUAL_LOGIN_EVENT.set()
         log_message(f"Manual check requires login: {exc}")
@@ -811,8 +823,11 @@ st.markdown(
         --accent: #38bdf8;
         --accent-strong: #6366f1;
     }
+    html, body, .stApp, [data-testid="stAppViewContainer"] {
+        background-color: #000000 !important;
+    }
     div[data-testid="stAppViewContainer"] > .main {
-        background: radial-gradient(circle at top, rgba(99, 102, 241, 0.18), transparent 55%), #020617;
+        background: radial-gradient(circle at top, rgba(99, 102, 241, 0.18), transparent 55%), #000000;
         color: #e2e8f0;
         padding-top: 0.5rem;
     }
