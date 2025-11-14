@@ -21,14 +21,15 @@ Automate copying new Outlook webmail into your primary Gmail account while stayi
    ```bash
    py -3 -m streamlit run app.py
    ```
-5. Follow the on-screen prompts to save your Outlook credentials, create the persistent Outlook browser profile via the manual login flow, and start the background watcher.
+5. Follow the on-screen prompts to set your Gmail destination, log into Outlook via the dedicated Chrome window, and start the background watcher.
 
 ## Features
-- Streamlit dashboard with start/stop controls, focus-aware live logging, and dependency self-checks.
-- Securely encrypted storage of Outlook credentials (Fernet encryption, decrypted only at use time).
+- Streamlit control center with start/stop controls, focus-aware live logging, and dependency self-checks.
+- Card-based layout with gradient styling, compact status metrics, and streamlined buttons.
+- Customizable polling cadence with human-like randomization between the limits you choose.
 - Manual and headless Selenium sessions backed by a persistent Chrome profile to minimize CAPTCHAs.
 - Gmail API integration for forwarding and alert notifications.
-- Human-like polling cadence, cooldowns on failure, and persistent forwarding history.
+- Persistent forwarding history and automatic cooldowns when Outlook objects.
 
 ## Prerequisites
 - Python 3.9 or later on Windows (tested) or other desktop OS.
@@ -77,9 +78,8 @@ If you see `Error 403: access_denied` while authorizing Gmail sending access:
    python -m streamlit run app.py
    ```
 4. The dashboard will automatically open in your default browser at `http://localhost:8501`.
-5. Enter your Outlook username and password once via the UI to encrypt and save them. The plaintext values are discarded immediately after encryption.
-6. Use **Launch Manual Login** to open a non-headless Chrome window, sign into Outlook manually, then click **Save & Close (Persist Login)** to store the profile.
-7. Press **Start scanning** to begin forwarding unread Outlook emails to the Gmail address you saved in settings.
+5. Use **Login to Outlook** to open a non-headless Chrome window, sign into Outlook manually, then click **Save & Close** to store the profile.
+6. Adjust the Gmail destination, run a test email, fine-tune the polling window, and press **Start scanning** to begin forwarding unread Outlook emails.
 
 ## Notes
 - Forwarded emails are tracked to avoid duplicates and daily counts reset automatically.

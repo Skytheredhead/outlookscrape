@@ -3,7 +3,7 @@ Outlook to Gmail Forwarder
 
 Installation requirements (run once):
     pip install selenium webdriver-manager google-api-python-client google-auth-httplib2 \
-                google-auth-oauthlib cryptography streamlit python-dateutil
+                google-auth-oauthlib streamlit python-dateutil
 
 Run the Streamlit UI:
     streamlit run app.py
@@ -23,11 +23,10 @@ from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import streamlit as st
 import streamlit.components.v1 as components
-from cryptography.fernet import Fernet
 from dateutil import tz
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -54,8 +53,6 @@ DATA_DIR.mkdir(exist_ok=True)
 
 CHROME_PROFILE_DIR = DATA_DIR / "chrome_profile"
 PROFILE_READY_PATH = DATA_DIR / "profile_ready.txt"
-FERNET_KEY_PATH = DATA_DIR / "fernet.key"
-ENCRYPTED_CREDENTIALS_PATH = DATA_DIR / "outlook.enc"
 FORWARDED_LOG_PATH = DATA_DIR / "forwarded.json"
 FORWARD_STATE_PATH = DATA_DIR / "daily_counter.json"
 SETTINGS_PATH = DATA_DIR / "settings.json"
@@ -111,6 +108,14 @@ def human_delay(min_seconds: float = 1.0, max_seconds: float = 2.0) -> None:
     time.sleep(random.uniform(min_seconds, max_seconds))
 
 
+def _coerce_minutes(value: Any, fallback: int, minimum: int = 1, maximum: int = 30) -> int:
+    try:
+        coerced = int(float(value))
+    except (TypeError, ValueError):
+        return fallback
+    return max(minimum, min(maximum, coerced))
+
+
 class ManualLoginRequired(Exception):
     """Raised when a manual login is required."""
 
@@ -119,57 +124,22 @@ class CaptchaDetected(Exception):
     """Raised when Outlook displays a CAPTCHA or block."""
 
 
-class CredentialManager:
-    """Manage encrypted Outlook credentials."""
-
-    def __init__(self) -> None:
-        self.key_path = FERNET_KEY_PATH
-        self.secret_path = ENCRYPTED_CREDENTIALS_PATH
-
-    def _get_cipher(self) -> Fernet:
-        if not self.key_path.exists():
-            key = Fernet.generate_key()
-            self.key_path.write_bytes(key)
-        else:
-            key = self.key_path.read_bytes()
-        return Fernet(key)
-
-    def save_credentials(self, username: str, password: str) -> None:
-        payload = json.dumps({"username": username, "password": password}).encode("utf-8")
-        cipher = self._get_cipher()
-        token = cipher.encrypt(payload)
-        self.secret_path.write_bytes(token)
-        log_message("Encrypted Outlook credentials saved.")
-
-    def load_credentials(self) -> Optional[Dict[str, str]]:
-        if not self.secret_path.exists():
-            return None
-        cipher = self._get_cipher()
-        try:
-            payload = cipher.decrypt(self.secret_path.read_bytes())
-            data = json.loads(payload.decode("utf-8"))
-            return data
-        except Exception as exc:  # noqa: BLE001
-            log_message(f"Failed to decrypt Outlook credentials: {exc}")
-            return None
-
-
 class SettingsManager:
     """Persist lightweight settings (Gmail target address, polling interval, etc.)."""
 
     def __init__(self) -> None:
         self.path = SETTINGS_PATH
-        self._settings: Dict[str, str] = {}
+        self._settings: Dict[str, Any] = {}
         if self.path.exists():
             try:
                 self._settings = json.loads(self.path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 self._settings = {}
 
-    def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
+    def get(self, key: str, default: Any = None) -> Any:
         return self._settings.get(key, default)
 
-    def set(self, key: str, value: str) -> None:
+    def set(self, key: str, value: Any) -> None:
         self._settings[key] = value
         self.path.write_text(json.dumps(self._settings, indent=2), encoding="utf-8")
 
@@ -355,9 +325,6 @@ class GmailForwarder:
 
 class OutlookAutomation:
     """Selenium automation for Outlook Web."""
-
-    def __init__(self, credential_manager: CredentialManager):
-        self.credential_manager = credential_manager
 
     def _create_driver(self, headless: bool = True, use_profile: bool = False) -> webdriver.Chrome:
         options = Options()
@@ -584,7 +551,7 @@ AUTOMATION_STATE = AutomationState(
     registry=ForwardedRegistry(FORWARDED_LOG_PATH),
     counter=DailyCounter(FORWARD_STATE_PATH),
     gmail_forwarder=GmailForwarder(SettingsManager()),
-    outlook=OutlookAutomation(CredentialManager()),
+    outlook=OutlookAutomation(),
     settings=SettingsManager(),
 )
 
@@ -658,7 +625,11 @@ def worker_loop(stop_event: threading.Event, manual_event: threading.Event) -> N
                     pass
         if stop_event.is_set():
             break
-        sleep_minutes = random.uniform(5, 10)
+        min_window = _coerce_minutes(settings.get("polling_min_minutes", 5), 5)
+        max_window = _coerce_minutes(settings.get("polling_max_minutes", 10), 10)
+        if max_window < min_window:
+            max_window = max(min_window, min_window + 1)
+        sleep_minutes = random.uniform(min_window, max_window)
         log_message(f"Sleeping for {sleep_minutes:.1f} minutes before next check.")
         stop_event.wait(sleep_minutes * 60)
     AUTOMATION_STATE.running = False
@@ -754,10 +725,104 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("📬 Outlook ➜ Gmail Forwarder")
-st.caption(
-    "Automate copying new Outlook emails into Gmail. The UI is optimized to stay idle when unfocused."
+st.markdown(
+    """
+    <style>
+    :root {
+        --accent-color: #6366f1;
+        --accent-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    }
+    div[data-testid="stAppViewContainer"] > .main {
+        background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+        padding-top: 1.5rem;
+    }
+    div[data-testid="stHeader"] {background: transparent;}
+    .card {
+        background: rgba(255, 255, 255, 0.94);
+        border-radius: 1.25rem;
+        padding: 1.2rem 1.6rem;
+        box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+        margin-bottom: 1.5rem;
+        backdrop-filter: blur(8px);
+    }
+    .section-title {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #312e81;
+        margin-bottom: 0.75rem;
+        letter-spacing: 0.01em;
+        text-transform: uppercase;
+    }
+    .stButton>button {
+        background: var(--accent-gradient);
+        color: #fff;
+        border-radius: 999px;
+        border: none;
+        font-weight: 600;
+        padding: 0.55rem 1.6rem;
+        box-shadow: 0 12px 30px rgba(99, 102, 241, 0.25);
+        transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+    }
+    .stButton>button:disabled {
+        background: linear-gradient(135deg, #c7d2fe 0%, #e0e7ff 100%);
+        color: #475569;
+        box-shadow: none;
+    }
+    .stButton>button:not(:disabled):hover {
+        transform: translateY(-1px);
+        box-shadow: 0 16px 35px rgba(99, 102, 241, 0.32);
+        opacity: 0.95;
+    }
+    .stButton>button:not(:disabled):active {
+        transform: translateY(0);
+        box-shadow: 0 10px 24px rgba(79, 70, 229, 0.28);
+    }
+    div[data-testid="stMetric"] {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 1rem;
+        padding: 1rem;
+        box-shadow: 0 12px 25px rgba(79, 70, 229, 0.12);
+    }
+    div[data-testid="stMetricLabel"] > div {
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        color: #4c1d95;
+        letter-spacing: 0.08em;
+    }
+    div[data-testid="stMetricValue"] > div {
+        font-size: 1.75rem;
+        font-weight: 700;
+        color: #0f172a;
+    }
+    div[data-baseweb="input"] input {
+        border-radius: 999px !important;
+        padding: 0.6rem 1rem !important;
+    }
+    div[data-baseweb="slider"] {
+        padding-top: 0.25rem;
+    }
+    .small-note {
+        font-size: 0.85rem;
+        color: #475569;
+    }
+    .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        background: rgba(99, 102, 241, 0.12);
+        color: #4338ca;
+        border-radius: 999px;
+        padding: 0.25rem 0.75rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
+
+st.title("📬 Outlook ➜ Gmail Forwarder")
+st.caption("A curated control center for forwarding Outlook mail into Gmail without the busywork.")
 
 focus_state = components.html(
     """
@@ -786,136 +851,165 @@ with st.expander("Setup checklist", expanded=False):
         """
         1. Install the dependencies listed at the top of this script.
         2. Download your `credentials.json` (or the `client_secret_*.apps.googleusercontent.com.json` file) from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) for the Gmail API and place it alongside this script.
-        3. Run `streamlit run app.py`.
-        4. Provide your Outlook credentials below (encrypted with Fernet).
-        5. Click **Launch Manual Login** to open Chrome (non-headless), sign in, then click **Save & Close** to persist the profile.
-        6. Click **Start scanning** to begin the background watcher.
+        3. Run `streamlit run app.py` (or double-click `run_app.bat` on Windows).
+        4. Enter the Gmail address that should receive forwarded messages and save it.
+        5. Click **Login to Outlook** to open Chrome (non-headless), sign in completely, then click **Save & Close** to persist the profile.
+        6. Press **Start scanning** (or **Run a check**) once the status indicators show that everything is ready.
         """
     )
 
 settings_manager = AUTOMATION_STATE.settings
-cred_manager = AUTOMATION_STATE.outlook.credential_manager
 
-col1, col2 = st.columns(2)
-with col1:
-    target_email = st.text_input(
-        "Main Gmail address to receive copies",
-        value=settings_manager.get("target_email", ""),
-        placeholder="you@example.com",
+target_email = settings_manager.get("target_email", "") or ""
+polling_min_saved = _coerce_minutes(settings_manager.get("polling_min_minutes", 5), 5)
+polling_max_saved = _coerce_minutes(settings_manager.get("polling_max_minutes", 10), 10)
+if polling_max_saved < polling_min_saved:
+    polling_max_saved = max(polling_min_saved, polling_min_saved + 1)
+
+with st.container():
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Notifications & cadence</div>", unsafe_allow_html=True)
+    notif_col, cadence_col = st.columns([1.35, 1])
+    with notif_col:
+        updated_email = st.text_input(
+            "Main Gmail address",
+            value=target_email,
+            placeholder="you@example.com",
+        )
+        button_cols = st.columns(2)
+        with button_cols[0]:
+            if st.button("Save Gmail address", use_container_width=True):
+                if updated_email:
+                    settings_manager.set("target_email", updated_email)
+                    target_email = updated_email
+                    st.success("Saved! Use the test button to confirm Gmail delivery when ready.")
+                else:
+                    st.error("Please provide a valid Gmail address.")
+        with button_cols[1]:
+            if st.button("Send test email", use_container_width=True):
+                if updated_email:
+                    settings_manager.set("target_email", updated_email)
+                    target_email = updated_email
+                    send_gmail_test_email(
+                        updated_email,
+                        "Sent a verification email. Check your Gmail inbox to confirm delivery.",
+                    )
+                else:
+                    st.error("Please provide a valid Gmail address before sending a test.")
+    with cadence_col:
+        st.markdown("<span class='pill'>⏱️ Polling window</span>", unsafe_allow_html=True)
+        polling_min, polling_max = st.slider(
+            "Choose how often to scan (minutes)",
+            min_value=1,
+            max_value=30,
+            value=(polling_min_saved, polling_max_saved),
+            help="The worker waits a random duration within this range before each Outlook scan.",
+        )
+        poll_message = f"Currently pausing between {polling_min} and {polling_max} minutes."
+        if (polling_min, polling_max) != (polling_min_saved, polling_max_saved):
+            settings_manager.set("polling_min_minutes", polling_min)
+            settings_manager.set("polling_max_minutes", polling_max)
+            poll_message = "Updated polling cadence saved instantly."
+        st.caption(poll_message)
+        st.caption("Persistent Outlook profile lives in `automation_state/chrome_profile/`.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+profile_ready = AUTOMATION_STATE.outlook.profile_ready()
+
+with st.container():
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Outlook session</div>", unsafe_allow_html=True)
+    status_label = "✅ Profile ready" if profile_ready else "⚠️ Profile missing"
+    st.markdown(
+        f"<span class='pill'>{status_label}</span>",
+        unsafe_allow_html=True,
     )
-    save_col, test_col = st.columns(2)
-    with save_col:
-        if st.button("Save Gmail address"):
-            if target_email:
-                settings_manager.set("target_email", target_email)
-                st.success("Saved target Gmail address. Use the test button when you're ready to verify delivery.")
-            else:
-                st.error("Please provide a valid Gmail address.")
-    with test_col:
-        if st.button("Send test email"):
-            if target_email:
-                send_gmail_test_email(
-                    target_email,
-                    "Sent a verification email. Check your Gmail inbox to confirm delivery.",
-                )
-            else:
-                st.error("Please provide a valid Gmail address before sending a test.")
+    st.caption(
+        "Launch the dedicated Chrome window to refresh your Outlook login whenever Microsoft asks for verification."
+    )
+    manual_cols = st.columns(2)
+    with manual_cols[0]:
+        if st.button("Login to Outlook", use_container_width=True):
+            try:
+                AUTOMATION_STATE.outlook.launch_manual_login()
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Failed to launch manual login: {exc}")
+    with manual_cols[1]:
+        if st.button("Save & Close", use_container_width=True):
+            try:
+                AUTOMATION_STATE.outlook.complete_manual_login()
+                st.success("Outlook profile saved. Future runs will reuse this login.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Failed to persist profile: {exc}")
+    if MANUAL_LOGIN_EVENT.is_set():
+        st.error("Manual login required. Launch the Outlook window, sign in, and save the session.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-with col2:
-    st.markdown("**Polling interval**: 5-10 minutes (randomized). Human-like delays applied to scraping.")
-    st.markdown("Persistent Outlook profile stored in: `automation_state/chrome_profile/`")
-
-st.markdown("---")
-
-credentials = cred_manager.load_credentials()
-if credentials:
-    st.success("Encrypted Outlook credentials are stored securely. Use the button below to update if needed.")
-else:
-    st.warning("Outlook credentials not saved yet. Enter them below and click save.")
-
-with st.form("outlook_credentials_form", clear_on_submit=False):
-    username = st.text_input("Outlook email", value=credentials.get("username") if credentials else "")
-    password = st.text_input("Outlook password", type="password")
-    submitted = st.form_submit_button("Encrypt & Save Outlook credentials")
-    if submitted:
-        if username and password:
-            cred_manager.save_credentials(username, password)
-            st.success("Encrypted credentials saved.")
-        else:
-            st.error("Both fields are required.")
-
-col_manual1, col_manual2 = st.columns(2)
-with col_manual1:
-    if st.button("Launch Manual Login (Chrome)"):
-        try:
-            AUTOMATION_STATE.outlook.launch_manual_login()
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Failed to launch manual login: {exc}")
-with col_manual2:
-    if st.button("Save & Close (Persist Login)"):
-        try:
-            AUTOMATION_STATE.outlook.complete_manual_login()
-            st.success("Outlook profile saved. Future runs will reuse this login.")
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Failed to persist profile: {exc}")
-
-if MANUAL_LOGIN_EVENT.is_set():
-    st.error("Manual login required. Launch the manual window, sign in, and save the profile.")
-
-st.markdown("---")
-
-status_col, stats_col = st.columns([2, 1])
-with status_col:
+with st.container():
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Automation status</div>", unsafe_allow_html=True)
     running = AUTOMATION_STATE.running
-    st.metric("Forwarded today", AUTOMATION_STATE.counter.get_count())
-    st.metric("Last run", AUTOMATION_STATE.last_run or "N/A")
-    st.metric("Cooldown until", AUTOMATION_STATE.cooldown_until.astimezone(tz.tzlocal()).strftime("%Y-%m-%d %H:%M:%S %Z") if AUTOMATION_STATE.cooldown_until else "Ready")
+    metric_cols = st.columns(3)
+    with metric_cols[0]:
+        st.metric("Forwarded today", AUTOMATION_STATE.counter.get_count())
+    with metric_cols[1]:
+        st.metric("Last run", AUTOMATION_STATE.last_run or "N/A")
+    with metric_cols[2]:
+        cooldown_value = (
+            AUTOMATION_STATE.cooldown_until.astimezone(tz.tzlocal()).strftime("%Y-%m-%d %H:%M:%S %Z")
+            if AUTOMATION_STATE.cooldown_until
+            else "Ready"
+        )
+        st.metric("Cooldown until", cooldown_value)
 
-with stats_col:
-    live_refresh = st.checkbox("Live refresh while focused", value=st.session_state.get("tab_focused", True) and running)
-    st.session_state["live_refresh"] = live_refresh
-
-start_col, stop_col, check_col = st.columns(3)
-with start_col:
-    if st.button("▶️ Start scanning", disabled=AUTOMATION_STATE.running):
-        if not settings_manager.get("target_email"):
-            st.error("Please save your target Gmail address first.")
-        elif not AUTOMATION_STATE.outlook.profile_ready():
-            MANUAL_LOGIN_EVENT.set()
-            st.error("Outlook profile not found. Launch the manual login window and save the session before starting.")
-        else:
-            STOP_EVENT.clear()
-            MANUAL_LOGIN_EVENT.clear()
-            AUTOMATION_STATE.running = True
-            AUTOMATION_STATE.cooldown_until = None
-            WORKER_THREAD = threading.Thread(
-                target=worker_loop,
-                args=(STOP_EVENT, MANUAL_LOGIN_EVENT),
-                name="OutlookForwarder",
-                daemon=True,
-            )
-            WORKER_THREAD.start()
-            st.success("Automation started. Logs will appear below.")
-
-with stop_col:
-    if st.button("⏹️ Stop", disabled=not AUTOMATION_STATE.running):
-        STOP_EVENT.set()
-        if WORKER_THREAD and WORKER_THREAD.is_alive():
-            WORKER_THREAD.join(timeout=2)
-        AUTOMATION_STATE.running = False
-        st.info("Automation stop requested.")
-
-with check_col:
-    if st.button("🔍 Run a check", disabled=AUTOMATION_STATE.running):
-        if not AUTOMATION_STATE.outlook.profile_ready():
-            MANUAL_LOGIN_EVENT.set()
-            st.error("Outlook profile not found. Launch the manual login window and save the session before running a check.")
-        else:
-            success, message = run_single_check()
-            if success:
-                st.success(message)
+    control_cols = st.columns([1.1, 1, 1, 1])
+    with control_cols[0]:
+        if st.button("▶️ Start scanning", disabled=AUTOMATION_STATE.running, use_container_width=True):
+            if not settings_manager.get("target_email"):
+                st.error("Please save your target Gmail address first.")
+            elif not AUTOMATION_STATE.outlook.profile_ready():
+                MANUAL_LOGIN_EVENT.set()
+                st.error("Outlook profile not found. Launch the manual login window and save the session before starting.")
             else:
-                st.error(message)
+                STOP_EVENT.clear()
+                MANUAL_LOGIN_EVENT.clear()
+                AUTOMATION_STATE.running = True
+                AUTOMATION_STATE.cooldown_until = None
+                WORKER_THREAD = threading.Thread(
+                    target=worker_loop,
+                    args=(STOP_EVENT, MANUAL_LOGIN_EVENT),
+                    name="OutlookForwarder",
+                    daemon=True,
+                )
+                WORKER_THREAD.start()
+                st.success("Automation started. Logs will appear below.")
+    with control_cols[1]:
+        if st.button("⏹️ Stop", disabled=not AUTOMATION_STATE.running, use_container_width=True):
+            STOP_EVENT.set()
+            if WORKER_THREAD and WORKER_THREAD.is_alive():
+                WORKER_THREAD.join(timeout=2)
+            AUTOMATION_STATE.running = False
+            st.info("Automation stop requested.")
+    with control_cols[2]:
+        if st.button("🔍 Run a check", disabled=AUTOMATION_STATE.running, use_container_width=True):
+            if not AUTOMATION_STATE.outlook.profile_ready():
+                MANUAL_LOGIN_EVENT.set()
+                st.error("Outlook profile not found. Launch the manual login window and save the session before running a check.")
+            else:
+                success, message = run_single_check()
+                if success:
+                    st.success(message)
+                else:
+                    st.error(message)
+    with control_cols[3]:
+        live_refresh = st.checkbox(
+            "Live refresh",
+            value=st.session_state.get("tab_focused", True) and running,
+            help="When enabled, the log view auto-refreshes whenever this tab stays in focus.",
+        )
+        st.session_state["live_refresh"] = live_refresh
+    st.caption("Automation picks a random delay inside your polling window after every scan.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -943,7 +1037,5 @@ if (
 if st.button("Refresh logs", help="Manual refresh to keep resource usage low when unfocused."):
     st.rerun()
 
-st.caption(
-    "This interface minimizes resource usage by refreshing logs only on demand or when the tab is focused with live refresh enabled."
-)
+st.markdown("[View the project on GitHub](https://github.com/Skytheredhead/outlookscrape)")
 
