@@ -778,11 +778,7 @@ with col1:
         if st.button("Save Gmail address"):
             if target_email:
                 settings_manager.set("target_email", target_email)
-                st.success("Saved target Gmail address.")
-                send_gmail_test_email(
-                    target_email,
-                    "Sent a verification email. Check your Gmail inbox to confirm delivery.",
-                )
+                st.success("Saved target Gmail address. Use the test button when you're ready to verify delivery.")
             else:
                 st.error("Please provide a valid Gmail address.")
     with test_col:
