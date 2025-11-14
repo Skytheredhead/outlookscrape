@@ -489,6 +489,67 @@ class OutlookAutomation:
             except Exception:  # noqa: BLE001
                 return False
 
+    @staticmethod
+    def _wait_for_folder_navigation(driver: webdriver.Chrome, folder_url: str) -> bool:
+        """Wait for the current URL to reflect the requested folder."""
+
+        try:
+            target_fragment = folder_url.rstrip("/").split("/mail/")[-1].lower()
+            if not target_fragment:
+                return False
+            WebDriverWait(driver, 10).until(
+                lambda d: target_fragment in ((d.current_url or "").lower())
+            )
+            return True
+        except TimeoutException:
+            return False
+
+    def _open_folder_by_click(
+        self, driver: webdriver.Chrome, folder_name: str, folder_url: str
+    ) -> bool:
+        """Attempt to switch Outlook folders via sidebar clicks instead of direct URL loads."""
+
+        sidebar_wait = WebDriverWait(driver, 12)
+        normalized_name = folder_name.strip()
+        # Common selectors for Outlook sidebar nodes. We try multiple strategies
+        # because Microsoft frequently tweaks the DOM structure.
+        locator_candidates: List[Tuple[str, str]] = [
+            (By.CSS_SELECTOR, f"button[title='{normalized_name}']"),
+            (By.CSS_SELECTOR, f"div[role='treeitem'][aria-label='{normalized_name}']"),
+            (By.XPATH, f"//div[@role='treeitem']//span[normalize-space(text())='{normalized_name}']"),
+            (By.XPATH, f"//span[@title='{normalized_name}']"),
+            (By.XPATH, f"//button[@aria-label='{normalized_name}']"),
+        ]
+
+        for by, value in locator_candidates:
+            try:
+                element = sidebar_wait.until(EC.presence_of_element_located((by, value)))
+            except TimeoutException:
+                continue
+            except Exception:  # noqa: BLE001
+                continue
+
+            clickable = element
+            try:
+                if clickable.tag_name.lower() == "span":
+                    clickable = clickable.find_element(
+                        By.XPATH, "ancestor::*[@role='treeitem' or @role='button'][1]"
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+            if clickable is None:
+                continue
+
+            if not self._safe_click(driver, clickable):
+                continue
+
+            human_delay(0.6, 1.2)
+            if self._wait_for_folder_navigation(driver, folder_url):
+                return True
+
+        return False
+
     def profile_ready(self) -> bool:
         if not PROFILE_READY_PATH.exists():
             return False
@@ -594,11 +655,16 @@ class OutlookAutomation:
         new_emails: List[EmailContent] = []
         for folder_name, folder_url in folders_to_check:
             log_message(f"Scanning folder: {folder_name}")
-            try:
-                driver.get(folder_url)
-            except WebDriverException as exc:  # noqa: BLE001
-                log_message(f"Failed to open Outlook folder '{folder_name}': {exc}")
-                continue
+            navigated = self._open_folder_by_click(driver, folder_name, folder_url)
+            if not navigated:
+                log_message(
+                    f"Falling back to direct navigation for {folder_name} due to missing sidebar element."
+                )
+                try:
+                    driver.get(folder_url)
+                except WebDriverException as exc:  # noqa: BLE001
+                    log_message(f"Failed to open Outlook folder '{folder_name}': {exc}")
+                    continue
             human_delay(1.0, 1.6)
             try:
                 wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="main"]')))
