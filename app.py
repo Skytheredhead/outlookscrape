@@ -34,7 +34,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -412,6 +412,35 @@ class OutlookAutomation:
         driver.set_window_size(1400, 900)
         return driver
 
+    @staticmethod
+    def _first_present(wait: WebDriverWait, locators: List[Tuple[str, str]]):
+        """Return the first element located from the provided strategies."""
+
+        for by, value in locators:
+            try:
+                element = wait.until(EC.presence_of_element_located((by, value)))
+                if element:
+                    return element
+            except TimeoutException:
+                continue
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+
+    @staticmethod
+    def _safe_click(driver: webdriver.Chrome, element: Any) -> bool:
+        """Click an element with fallbacks to reduce flakiness."""
+
+        try:
+            ActionChains(driver).move_to_element(element).pause(random.uniform(0.5, 1.2)).click().perform()
+            return True
+        except WebDriverException:
+            try:
+                driver.execute_script("arguments[0].click();", element)
+                return True
+            except Exception:  # noqa: BLE001
+                return False
+
     def profile_ready(self) -> bool:
         if not PROFILE_READY_PATH.exists():
             return False
@@ -523,21 +552,8 @@ class OutlookAutomation:
                 log_message(f"Failed to open Outlook folder '{folder_name}': {exc}")
                 continue
             human_delay(1.0, 1.6)
-            tail = folder_url.rsplit("/", 1)[-1].lower()
-            current_url = (driver.current_url or "").lower()
-            if tail not in current_url:
-                try:
-                    nav_button = driver.find_element(
-                        By.XPATH,
-                        "//span[normalize-space()='{0}']/ancestor::button[1] | "
-                        "//span[contains(@title, '{0}')]/ancestor::button[1]".format(folder_name),
-                    )
-                    driver.execute_script("arguments[0].click();", nav_button)
-                    human_delay(0.8, 1.2)
-                except Exception as exc:  # noqa: BLE001
-                    log_message(f"Unable to switch to folder '{folder_name}' via navigation: {exc}")
             try:
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="option"]')))
+                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="main"]')))
             except TimeoutException:
                 log_message(f"{folder_name} appears empty or failed to load.")
                 continue
@@ -555,26 +571,48 @@ class OutlookAutomation:
                     continue
                 if not is_unread:
                     continue
-                try:
-                    ActionChains(driver).move_to_element(row).pause(random.uniform(0.5, 1.2)).click().perform()
-                except WebDriverException as exc:  # noqa: BLE001
-                    log_message(f"Failed to select email row in {folder_name}: {exc}")
+                if not self._safe_click(driver, row):
+                    log_message(f"Failed to select email row in {folder_name}. Skipping message.")
                     continue
                 human_delay()
-                try:
-                    sender_elem = wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="main"] span[title]'))
+                content_wait = WebDriverWait(driver, 12)
+                sender_elem = self._first_present(
+                    content_wait,
+                    [
+                        (By.CSS_SELECTOR, 'div[role="main"] [data-test-id="message-header-from"] span'),
+                        (By.CSS_SELECTOR, 'div[role="main"] span[title]'),
+                        (By.CSS_SELECTOR, 'div[role="main"] [data-test-id="sender-name"]'),
+                    ],
+                )
+                subject_elem = self._first_present(
+                    content_wait,
+                    [
+                        (By.CSS_SELECTOR, 'div[role="main"] h1'),
+                        (By.CSS_SELECTOR, 'div[role="main"] [data-test-id="message-subject"]'),
+                        (By.CSS_SELECTOR, 'div[role="main"] [role="heading"]'),
+                    ],
+                )
+                body_elem = self._first_present(
+                    content_wait,
+                    [
+                        (By.CSS_SELECTOR, 'div[role="document"]'),
+                        (By.CSS_SELECTOR, 'div[aria-label="Message body"]'),
+                        (By.CSS_SELECTOR, 'div[data-test-id="message-body-container"]'),
+                    ],
+                )
+
+                if not subject_elem or not body_elem:
+                    log_message(
+                        f"Failed to parse email content in {folder_name}: missing subject or body elements."
                     )
-                    subject_elem = driver.find_element(By.CSS_SELECTOR, 'div[role="main"] h1')
-                    body_container = driver.find_element(By.CSS_SELECTOR, 'div[role="document"]')
-                    sender = sender_elem.text.strip()
-                    subject = subject_elem.text.strip()
-                    body_html = body_container.get_attribute("innerHTML")
-                    body_text = body_container.text
-                    new_emails.append(EmailContent(item_id, sender, subject, body_html, body_text))
-                    log_message(f"Captured email '{subject}' from {sender} in {folder_name}")
-                except NoSuchElementException as exc:
-                    log_message(f"Failed to parse email content in {folder_name}: {exc}")
+                    continue
+
+                sender = sender_elem.text.strip() if sender_elem else "Unknown sender"
+                subject = subject_elem.text.strip()
+                body_html = body_elem.get_attribute("innerHTML") or ""
+                body_text = body_elem.text or ""
+                new_emails.append(EmailContent(item_id, sender, subject, body_html, body_text))
+                log_message(f"Captured email '{subject}' from {sender} in {folder_name}")
                 human_delay(0.5, 1.0)
         return new_emails
 
