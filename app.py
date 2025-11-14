@@ -70,12 +70,17 @@ OUTLOOK_FOLDERS = [
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
-MANUAL_LOGIN_EVENT = threading.Event()
-STOP_EVENT = threading.Event()
-WORKER_THREAD: Optional[threading.Thread] = None
-MANUAL_DRIVER_HOLDER: Dict[str, Optional[webdriver.Chrome]] = {"driver": None}
+if "MANUAL_LOGIN_EVENT" not in globals():
+    MANUAL_LOGIN_EVENT = threading.Event()
+if "STOP_EVENT" not in globals():
+    STOP_EVENT = threading.Event()
+if "WORKER_THREAD" not in globals():
+    WORKER_THREAD: Optional[threading.Thread] = None
+if "MANUAL_DRIVER_HOLDER" not in globals():
+    MANUAL_DRIVER_HOLDER: Dict[str, Optional[webdriver.Chrome]] = {"driver": None}
 
-LOG_BUFFER: Deque[str] = deque(maxlen=500)
+if "LOG_BUFFER" not in globals():
+    LOG_BUFFER: Deque[str] = deque(maxlen=500)
 LOG_LOCK = threading.Lock()
 
 
@@ -280,6 +285,24 @@ class GmailForwarder:
         subject = "Outlook check failed - possible block. Check manually."
         text_body = f"Automation failed with reason: {reason}\nPlease sign in manually."
         html_body = f"<p>Automation failed with reason: <strong>{reason}</strong></p><p>Please sign in manually.</p>"
+        self.send_email(to_email, subject, html_body, text_body)
+
+    def send_test_email(self, to_email: str) -> None:
+        timestamp = datetime.now().astimezone(tz.tzlocal()).strftime("%Y-%m-%d %H:%M:%S %Z")
+        subject = "Outlook ➜ Gmail Forwarder test message"
+        text_body = (
+            "Hello!\n\n"
+            "This is a verification email sent by the Outlook ➜ Gmail Forwarder to confirm that "
+            "your Gmail connection is working.\n\n"
+            f"Timestamp: {timestamp}\n"
+        )
+        html_body = (
+            "<p>Hello!</p>"
+            "<p>This is a verification email sent by the <strong>Outlook ➜ Gmail Forwarder</strong> to confirm "
+            "that your Gmail connection is working.</p>"
+            f"<p>Timestamp: <code>{timestamp}</code></p>"
+        )
+        log_message(f"Sending Gmail connectivity test email to {to_email}.")
         self.send_email(to_email, subject, html_body, text_body)
 
 
@@ -542,6 +565,83 @@ def worker_loop(stop_event: threading.Event, manual_event: threading.Event) -> N
     log_message("Automation worker stopped.")
 
 
+def run_single_check() -> Tuple[bool, str]:
+    settings = AUTOMATION_STATE.settings
+    target_email = settings.get("target_email")
+    if not target_email:
+        return False, "Please save your target Gmail address first."
+
+    registry = AUTOMATION_STATE.registry
+    counter = AUTOMATION_STATE.counter
+    gmail = AUTOMATION_STATE.gmail_forwarder
+    outlook = AUTOMATION_STATE.outlook
+
+    log_message("Manual check triggered from the UI.")
+    driver: Optional[webdriver.Chrome] = None
+    try:
+        driver = outlook.ensure_session()
+        emails = outlook.fetch_new_emails(driver, registry)
+        if emails:
+            for email in emails:
+                gmail.send_email(target_email, f"FWD: {email.subject}", email.body_html, email.body_text)
+                registry.add(email.message_id)
+                counter.increment()
+            log_message(f"Manual check forwarded {len(emails)} new email(s).")
+            message = f"Manual check complete. Forwarded {len(emails)} new email(s)."
+        else:
+            log_message("Manual check: no new unread emails detected.")
+            message = "Manual check complete. No unread emails detected."
+        AUTOMATION_STATE.last_run = datetime.now().astimezone(tz.tzlocal()).strftime("%Y-%m-%d %H:%M:%S %Z")
+        AUTOMATION_STATE.cooldown_until = None
+        return True, message
+    except ManualLoginRequired as exc:
+        MANUAL_LOGIN_EVENT.set()
+        log_message(f"Manual check requires login: {exc}")
+        try:
+            gmail.send_alert(target_email, str(exc))
+        except Exception:  # noqa: BLE001
+            pass
+        AUTOMATION_STATE.cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=30)
+        return False, f"Manual login required: {exc}"
+    except CaptchaDetected as exc:
+        MANUAL_LOGIN_EVENT.set()
+        log_message(f"Manual check detected CAPTCHA: {exc}")
+        AUTOMATION_STATE.cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=30)
+        return False, "CAPTCHA detected. Please complete the manual login flow."
+    except Exception as exc:  # noqa: BLE001
+        log_message(f"Manual check failed: {exc}")
+        return False, f"Manual check failed: {exc}"
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def send_gmail_test_email(target_email: str, success_message: str) -> None:
+    try:
+        AUTOMATION_STATE.gmail_forwarder.send_test_email(target_email)
+    except FileNotFoundError:
+        message = (
+            "Google API token not found. Place your credentials.json in the project directory "
+            "and authorize the Gmail API before sending test emails."
+        )
+        st.warning(message)
+        log_message(message)
+    except HttpError as exc:
+        message = f"Gmail API error while sending test email: {exc}"
+        st.error(message)
+        log_message(message)
+    except Exception as exc:  # noqa: BLE001
+        message = f"Failed to send test email: {exc}"
+        st.error(message)
+        log_message(message)
+    else:
+        st.success(success_message)
+        log_message(f"Test email sent to {target_email}.")
+
+
 # --------------------------------------------------------------------------------------
 # Streamlit UI
 # --------------------------------------------------------------------------------------
@@ -600,12 +700,27 @@ with col1:
         value=settings_manager.get("target_email", ""),
         placeholder="you@example.com",
     )
-    if st.button("Save Gmail address"):
-        if target_email:
-            settings_manager.set("target_email", target_email)
-            st.success("Saved target Gmail address.")
-        else:
-            st.error("Please provide a valid Gmail address.")
+    save_col, test_col = st.columns(2)
+    with save_col:
+        if st.button("Save Gmail address"):
+            if target_email:
+                settings_manager.set("target_email", target_email)
+                st.success("Saved target Gmail address.")
+                send_gmail_test_email(
+                    target_email,
+                    "Sent a verification email. Check your Gmail inbox to confirm delivery.",
+                )
+            else:
+                st.error("Please provide a valid Gmail address.")
+    with test_col:
+        if st.button("Send test email"):
+            if target_email:
+                send_gmail_test_email(
+                    target_email,
+                    "Sent a verification email. Check your Gmail inbox to confirm delivery.",
+                )
+            else:
+                st.error("Please provide a valid Gmail address before sending a test.")
 
 with col2:
     st.markdown("**Polling interval**: 5-10 minutes (randomized). Human-like delays applied to scraping.")
@@ -661,7 +776,7 @@ with stats_col:
     live_refresh = st.checkbox("Live refresh while focused", value=st.session_state.get("tab_focused", True) and running)
     st.session_state["live_refresh"] = live_refresh
 
-start_col, stop_col = st.columns(2)
+start_col, stop_col, check_col = st.columns(3)
 with start_col:
     if st.button("▶️ Start scanning", disabled=AUTOMATION_STATE.running):
         if not settings_manager.get("target_email"):
@@ -688,6 +803,14 @@ with stop_col:
         AUTOMATION_STATE.running = False
         st.info("Automation stop requested.")
 
+with check_col:
+    if st.button("🔍 Run a check", disabled=AUTOMATION_STATE.running):
+        success, message = run_single_check()
+        if success:
+            st.success(message)
+        else:
+            st.error(message)
+
 st.markdown("---")
 
 log_container = st.empty()
@@ -713,7 +836,7 @@ if (
     )
 
 if st.button("Refresh logs", help="Manual refresh to keep resource usage low when unfocused."):
-    st.experimental_rerun()
+    st.rerun()
 
 st.caption(
     "This interface minimizes resource usage by refreshing logs only on demand or when the tab is focused with live refresh enabled."
