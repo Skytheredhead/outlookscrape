@@ -728,15 +728,81 @@ def send_gmail_test_email(target_email: str, success_message: str) -> None:
         log_message(f"Test email sent to {target_email}.")
 
 
+def handle_open_outlook_and_start() -> None:
+    """Single entrypoint for: open Outlook → save session → start automation."""
+    global WORKER_THREAD
+
+    settings_manager = AUTOMATION_STATE.settings
+    outlook = AUTOMATION_STATE.outlook
+
+    target_email = settings_manager.get("target_email")
+    if not target_email:
+        st.error("Set your target Gmail address first.")
+        return
+
+    profile_ready = outlook.profile_ready()
+    driver = MANUAL_DRIVER_HOLDER.get("driver")
+
+    # Phase 1: No profile yet → open Outlook window so user can log in
+    if not profile_ready and not driver:
+        try:
+            outlook.launch_manual_login()
+            MANUAL_LOGIN_EVENT.set()
+            st.info("Outlook window opened. Sign in fully, then click this button again.")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Could not launch Outlook: {exc}")
+        return
+
+    # Phase 2: Driver exists but profile not saved yet → try to persist the session
+    if not profile_ready and driver:
+        try:
+            outlook.complete_manual_login()
+            profile_ready = True
+            MANUAL_LOGIN_EVENT.clear()
+            st.success("Outlook session saved. Starting the forwarder…")
+        except Exception as exc:  # noqa: BLE001
+            st.error(
+                "Outlook inbox not detected yet. Make sure you're fully signed in, "
+                "then click this button again."
+            )
+            return
+
+    # Phase 3: Profile ready → start automation if not already running
+    if profile_ready:
+        if AUTOMATION_STATE.running:
+            st.info("Automation is already running.")
+            return
+
+        if not settings_manager.get("target_email"):
+            st.error("Set your target Gmail address first.")
+            return
+
+        STOP_EVENT.clear()
+        MANUAL_LOGIN_EVENT.clear()
+        AUTOMATION_STATE.running = True
+        AUTOMATION_STATE.cooldown_until = None
+
+        WORKER_THREAD = threading.Thread(
+            target=worker_loop,
+            args=(STOP_EVENT, MANUAL_LOGIN_EVENT),
+            name="OutlookForwarder",
+            daemon=True,
+        )
+        WORKER_THREAD.start()
+        st.success("Automation started. New Outlook mail will be forwarded to Gmail.")
+
+
 # --------------------------------------------------------------------------------------
 # Streamlit UI
 # --------------------------------------------------------------------------------------
+
 st.set_page_config(
     page_title="Outlook ➜ Gmail Forwarder",
     page_icon="📬",
     layout="wide",
 )
 
+# --- Global dark styling ---
 st.markdown(
     """
     <style>
@@ -746,55 +812,55 @@ st.markdown(
         --accent-strong: #6366f1;
     }
     div[data-testid="stAppViewContainer"] > .main {
-        background: radial-gradient(circle at top, rgba(99, 102, 241, 0.2), transparent 60%), #0b1120;
+        background: radial-gradient(circle at top, rgba(99, 102, 241, 0.18), transparent 55%), #020617;
         color: #e2e8f0;
-        padding-top: 1rem;
+        padding-top: 0.5rem;
     }
     div.block-container {
-        padding-top: 1rem;
-        padding-bottom: 2.4rem;
+        padding-top: 0.7rem;
+        padding-bottom: 2rem;
         max-width: 1120px;
     }
     div[data-testid="stHeader"] {background: transparent;}
     .page-title {
         font-size: 1.9rem;
         font-weight: 700;
-        color: #f8fafc;
-        margin-bottom: 0.2rem;
+        color: #f9fafb;
+        margin-bottom: 0.1rem;
     }
     .page-subtitle {
         color: #94a3b8;
         font-size: 0.95rem;
-        margin-bottom: 1.1rem;
+        margin-bottom: 0.9rem;
     }
     .card {
-        background: rgba(15, 23, 42, 0.88);
+        background: rgba(15, 23, 42, 0.9);
         border-radius: 0.9rem;
-        padding: 1rem 1.2rem;
-        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.45);
-        margin-bottom: 1rem;
-        border: 1px solid rgba(148, 163, 184, 0.12);
+        padding: 0.9rem 1.1rem;
+        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.55);
+        margin-bottom: 0.9rem;
+        border: 1px solid rgba(148, 163, 184, 0.17);
     }
     .section-title {
-        font-size: 0.92rem;
+        font-size: 0.9rem;
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: #bae6fd;
-        margin-bottom: 0.55rem;
+        margin-bottom: 0.45rem;
     }
     .stButton>button {
         background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
-        color: #0b1120;
-        border-radius: 0.65rem;
+        color: #020617;
+        border-radius: 0.7rem;
         border: none;
         font-weight: 600;
         font-size: 0.9rem;
-        padding: 0.45rem 0.85rem;
-        transition: transform 0.15s ease, filter 0.15s ease;
-        box-shadow: 0 10px 24px rgba(56, 189, 248, 0.35);
+        padding: 0.45rem 0.9rem;
+        transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
+        box-shadow: 0 10px 24px rgba(56, 189, 248, 0.38);
     }
     .stButton>button:disabled {
-        background: rgba(30, 41, 59, 0.85);
+        background: rgba(30, 41, 59, 0.9);
         color: #64748b;
         box-shadow: none;
     }
@@ -806,56 +872,56 @@ st.markdown(
         transform: translateY(0);
     }
     div[data-baseweb="input"] input {
-        background: rgba(15, 23, 42, 0.65);
+        background: rgba(15, 23, 42, 0.85);
         border-radius: 0.65rem !important;
-        border: 1px solid rgba(148, 163, 184, 0.28);
+        border: 1px solid rgba(148, 163, 184, 0.4);
         color: #e2e8f0 !important;
         padding: 0.48rem 0.85rem !important;
+        font-size: 0.9rem !important;
     }
     div[data-baseweb="input"] input::placeholder {
         color: #64748b;
     }
     div[data-baseweb="slider"] {
-        padding: 0.3rem 0.35rem 0.1rem;
+        padding: 0.25rem 0.35rem 0.1rem;
     }
     .small-note {
         font-size: 0.78rem;
         color: #94a3b8;
-        margin-top: 0.3rem;
+        margin-top: 0.25rem;
     }
     .pill {
         display: inline-flex;
         align-items: center;
         gap: 0.35rem;
-        background: rgba(56, 189, 248, 0.18);
-        color: #e0f2fe;
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid rgba(148, 163, 184, 0.6);
+        color: #e5e7eb;
         border-radius: 999px;
-        padding: 0.18rem 0.75rem;
+        padding: 0.16rem 0.75rem;
         font-size: 0.75rem;
         font-weight: 600;
-        letter-spacing: 0.03em;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
     }
     div[data-testid="stMetric"] {
-        background: rgba(15, 23, 42, 0.78);
+        background: rgba(15, 23, 42, 0.88);
         border-radius: 0.75rem;
-        border: 1px solid rgba(148, 163, 184, 0.18);
+        border: 1px solid rgba(51, 65, 85, 0.9);
+        padding: 0.3rem 0.55rem;
     }
     div[data-testid="stMetricLabel"] > div {
-        color: #94a3b8;
+        color: #9ca3af;
         font-size: 0.75rem;
         letter-spacing: 0.08em;
     }
     div[data-testid="stMetricValue"] > div {
-        color: #f8fafc;
-        font-size: 1.45rem;
+        color: #f9fafb;
+        font-size: 1.35rem;
         font-weight: 700;
     }
-    .stCheckbox>label {
-        color: #cbd5f5;
-        font-size: 0.84rem;
-    }
     pre, code {
-        background-color: rgba(15, 23, 42, 0.85) !important;
+        background-color: rgba(15, 23, 42, 0.95) !important;
         color: #e2e8f0 !important;
     }
     a, .stMarkdown a {
@@ -866,12 +932,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown("<div class='page-title'>📬 Outlook ➜ Gmail Forwarder</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='page-subtitle'>A compact command center for relaying Outlook messages into Gmail on your terms.</div>",
-    unsafe_allow_html=True,
-)
-
+# --- Tab focus → optional live refresh of logs ---
 focus_state = components.html(
     """
     <script>
@@ -888,202 +949,209 @@ focus_state = components.html(
     """,
     height=0,
 )
-if focus_state is None:
-    is_focused = True
-else:
-    is_focused = bool(focus_state)
+is_focused = True if focus_state is None else bool(focus_state)
 st.session_state["tab_focused"] = is_focused
 
-with st.expander("Setup checklist", expanded=False):
+# --- Title ---
+st.markdown("<div class='page-title'>📬 Outlook ➜ Gmail Forwarder</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='page-subtitle'>Keep Outlook open in the background. This page forwards new mail into Gmail.</div>",
+    unsafe_allow_html=True,
+)
+
+with st.expander("Quick setup", expanded=False):
     st.markdown(
         """
-        1. Install the dependencies listed at the top of this script.
-        2. Download your `credentials.json` (or the `client_secret_*.apps.googleusercontent.com.json` file) from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) for the Gmail API and place it alongside this script.
-        3. Run `streamlit run app.py` (or double-click `run_app.bat` on Windows).
-        4. Enter the Gmail address that should receive forwarded messages and save it.
-        5. Click **Login to Outlook** to open Chrome (non-headless), sign in completely, then click **Save session** to persist the profile and keep the window open.
-        6. Press **Start scanning** (or **Run a check**) once the status indicators show that everything is ready.
+        1. Install the Python packages listed at the top of the script.  
+        2. Put your Gmail API `credentials.json` next to this file.  
+        3. Enter the Gmail address below.  
+        4. Click **Open Outlook & Start** and follow the prompts.
         """
     )
 
 settings_manager = AUTOMATION_STATE.settings
 
-if "auto_outlook_open_attempted" not in st.session_state:
-    st.session_state["auto_outlook_open_attempted"] = False
-
-profile_ready = AUTOMATION_STATE.outlook.profile_ready()
-if profile_ready and not st.session_state["auto_outlook_open_attempted"]:
-    st.session_state["auto_outlook_open_attempted"] = True
-    try:
-        AUTOMATION_STATE.outlook.launch_manual_login(auto_open=True)
-    except Exception as exc:  # noqa: BLE001
-        st.warning(f"Unable to auto-open Outlook window: {exc}")
-elif not profile_ready:
-    st.session_state["auto_outlook_open_attempted"] = False
-
+# --- Load persisted settings ---
 target_email = settings_manager.get("target_email", "") or ""
 polling_min_saved = _coerce_minutes(settings_manager.get("polling_min_minutes", 5), 5)
 polling_max_saved = _coerce_minutes(settings_manager.get("polling_max_minutes", 10), 10)
 if polling_max_saved < polling_min_saved:
     polling_max_saved = max(polling_min_saved, polling_min_saved + 1)
 
+profile_ready = AUTOMATION_STATE.outlook.profile_ready()
+running = AUTOMATION_STATE.running
+
+# === Card 1: Gmail & cadence / Status ===
 with st.container():
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>Notifications & cadence</div>", unsafe_allow_html=True)
-    notif_col, cadence_col = st.columns([1.35, 1])
-    with notif_col:
+    top_cols = st.columns([1.5, 1])
+
+    # Left: Gmail + cadence
+    with top_cols[0]:
+        st.markdown("<div class='section-title'>Delivery</div>", unsafe_allow_html=True)
+
         updated_email = st.text_input(
-            "Main Gmail address",
+            "Gmail address that should receive forwarded mail",
             value=target_email,
             placeholder="you@example.com",
         )
+
         normalized_saved = (target_email or "").strip().lower()
         normalized_input = (updated_email or "").strip()
         save_disabled = normalized_input.lower() == normalized_saved
-        button_cols = st.columns(2)
-        with button_cols[0]:
-            if st.button(
-                "Save Gmail address",
-                disabled=save_disabled,
-            ):
+
+        btn_cols = st.columns([1.1, 1])
+        with btn_cols[0]:
+            if st.button("Save Gmail address", disabled=save_disabled):
                 if normalized_input:
                     settings_manager.set("target_email", normalized_input)
                     target_email = normalized_input
-                    st.success("Saved! Use the test button to confirm Gmail delivery when ready.")
+                    st.success("Saved.")
                 else:
-                    st.error("Please provide a valid Gmail address.")
-        with button_cols[1]:
+                    st.error("Enter a valid Gmail address first.")
+        with btn_cols[1]:
             if st.button("Send test email"):
                 if normalized_input:
                     settings_manager.set("target_email", normalized_input)
                     target_email = normalized_input
                     send_gmail_test_email(
                         normalized_input,
-                        "Sent a verification email. Check your Gmail inbox to confirm delivery.",
+                        "Verification email sent. Check your Gmail inbox.",
                     )
                 else:
-                    st.error("Please provide a valid Gmail address before sending a test.")
-    with cadence_col:
-        st.markdown("<span class='pill'>⏱️ Polling window</span>", unsafe_allow_html=True)
+                    st.error("Enter a Gmail address before sending a test.")
+
+        st.markdown("<div class='small-note'>For best results, use a dedicated Gmail account for forwarding.</div>", unsafe_allow_html=True)
+
+        st.markdown("<div class='section-title' style='margin-top:0.8rem;'>Cadence</div>", unsafe_allow_html=True)
         polling_min, polling_max = st.slider(
-            "Choose how often to scan (minutes)",
+            "Scan interval (minutes, random in this range)",
             min_value=1,
             max_value=30,
             value=(polling_min_saved, polling_max_saved),
-            help="The worker waits a random duration within this range before each Outlook scan.",
+            help="The worker sleeps a random duration within this range between checks.",
         )
-        poll_message = f"Currently pausing between {polling_min} and {polling_max} minutes."
         if (polling_min, polling_max) != (polling_min_saved, polling_max_saved):
             settings_manager.set("polling_min_minutes", polling_min)
             settings_manager.set("polling_max_minutes", polling_max)
-            poll_message = "Updated polling cadence saved instantly."
-        st.markdown(f"<div class='small-note'>{poll_message}</div>", unsafe_allow_html=True)
+            note = "Updated polling cadence saved."
+        else:
+            note = f"Currently pausing between {polling_min}–{polling_max} minutes."
+        st.markdown(f"<div class='small-note'>{note}</div>", unsafe_allow_html=True)
+
+    # Right: high-level metrics
+    with top_cols[1]:
+        st.markdown("<div class='section-title'>Status</div>", unsafe_allow_html=True)
+
+        status_pill_parts = []
+        if target_email:
+            status_pill_parts.append("Gmail ✔")
+        else:
+            status_pill_parts.append("Gmail ⚠")
+        if profile_ready:
+            status_pill_parts.append("Outlook ✔")
+        else:
+            status_pill_parts.append("Outlook ⚠")
+        if running:
+            status_pill_parts.append("Running ▶")
+        else:
+            status_pill_parts.append("Idle ⏸")
+
+        pill_text = " · ".join(status_pill_parts)
+        st.markdown(f"<span class='pill'>{pill_text}</span>", unsafe_allow_html=True)
+
+        metric_cols = st.columns(3)
+        with metric_cols[0]:
+            st.metric("Forwarded today", AUTOMATION_STATE.counter.get_count())
+        with metric_cols[1]:
+            st.metric("Last run", AUTOMATION_STATE.last_run or "N/A")
+        with metric_cols[2]:
+            cooldown_value = (
+                AUTOMATION_STATE.cooldown_until.astimezone(tz.tzlocal()).strftime("%Y-%m-%d %H:%M:%S %Z")
+                if AUTOMATION_STATE.cooldown_until
+                else "Ready"
+            )
+            st.metric("Cooldown until", cooldown_value)
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-profile_ready = AUTOMATION_STATE.outlook.profile_ready()
-
+# === Card 2: Outlook & automation controls (single primary button) ===
 with st.container():
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>Outlook session</div>", unsafe_allow_html=True)
-    status_label = "✅ Profile ready" if profile_ready else "⚠️ Profile missing"
-    st.markdown(
-        f"<span class='pill'>{status_label}</span>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<div class='small-note'>Launch the dedicated Chrome window whenever Microsoft asks you to verify the session. Keep it open and signed in.</div>",
-        unsafe_allow_html=True,
-    )
-    manual_cols = st.columns(2)
-    with manual_cols[0]:
-        if st.button("Login to Outlook"):
-            try:
-                AUTOMATION_STATE.outlook.launch_manual_login()
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Failed to launch manual login: {exc}")
-    with manual_cols[1]:
-        if st.button("Save session"):
-            try:
-                AUTOMATION_STATE.outlook.complete_manual_login()
-                st.success("Session saved. Leave the Outlook window open so scans can reuse it instantly.")
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Failed to persist profile: {exc}")
-    if MANUAL_LOGIN_EVENT.is_set():
-        st.error("Manual login required. Launch the Outlook window, sign in, and save the session.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Outlook & automation</div>", unsafe_allow_html=True)
 
-with st.container():
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>Automation status</div>", unsafe_allow_html=True)
-    running = AUTOMATION_STATE.running
-    metric_cols = st.columns(3)
-    with metric_cols[0]:
-        st.metric("Forwarded today", AUTOMATION_STATE.counter.get_count())
-    with metric_cols[1]:
-        st.metric("Last run", AUTOMATION_STATE.last_run or "N/A")
-    with metric_cols[2]:
-        cooldown_value = (
-            AUTOMATION_STATE.cooldown_until.astimezone(tz.tzlocal()).strftime("%Y-%m-%d %H:%M:%S %Z")
-            if AUTOMATION_STATE.cooldown_until
-            else "Ready"
-        )
-        st.metric("Cooldown until", cooldown_value)
-
-    control_cols = st.columns([1.1, 1, 1, 1])
-    with control_cols[0]:
-        if st.button("▶️ Start scanning", disabled=AUTOMATION_STATE.running):
-            if not settings_manager.get("target_email"):
-                st.error("Please save your target Gmail address first.")
-            elif not AUTOMATION_STATE.outlook.profile_ready():
-                MANUAL_LOGIN_EVENT.set()
-                st.error("Outlook profile not found. Launch the manual login window and save the session before starting.")
-            else:
-                STOP_EVENT.clear()
-                MANUAL_LOGIN_EVENT.clear()
-                AUTOMATION_STATE.running = True
-                AUTOMATION_STATE.cooldown_until = None
-                WORKER_THREAD = threading.Thread(
-                    target=worker_loop,
-                    args=(STOP_EVENT, MANUAL_LOGIN_EVENT),
-                    name="OutlookForwarder",
-                    daemon=True,
-                )
-                WORKER_THREAD.start()
-                st.success("Automation started. Logs will appear below.")
-    with control_cols[1]:
-        if st.button("⏹️ Stop", disabled=not AUTOMATION_STATE.running):
+    # Main controls row
+    ctrl_cols = st.columns([1.4, 0.9, 0.9])
+    with ctrl_cols[0]:
+        if st.button("🚀 Open Outlook & Start", disabled=False if not running else True, use_container_width=True):
+            handle_open_outlook_and_start()
+    with ctrl_cols[1]:
+        if st.button("⏹ Stop", disabled=not running, use_container_width=True):
             STOP_EVENT.set()
             if WORKER_THREAD and WORKER_THREAD.is_alive():
                 WORKER_THREAD.join(timeout=2)
             AUTOMATION_STATE.running = False
             st.info("Automation stop requested.")
-    with control_cols[2]:
-        if st.button("🔍 Run a check", disabled=AUTOMATION_STATE.running):
+    with ctrl_cols[2]:
+        if st.button("🔍 Run one check", disabled=running, use_container_width=True):
             if not AUTOMATION_STATE.outlook.profile_ready():
                 MANUAL_LOGIN_EVENT.set()
-                st.error("Outlook profile not found. Launch the manual login window and save the session before running a check.")
+                st.error("Outlook profile not found. Use “Open Outlook & Start” to create it first.")
             else:
                 success, message = run_single_check()
                 if success:
                     st.success(message)
                 else:
                     st.error(message)
-    with control_cols[3]:
+
+    # Simple helper text
+    if MANUAL_LOGIN_EVENT.is_set():
+        st.warning(
+            "Manual Outlook login required. When the Outlook window opens, sign in completely, "
+            "then click “Open Outlook & Start” again."
+        )
+    elif not profile_ready:
+        st.markdown(
+            "<div class='small-note'>First run: the button will open Outlook so you can sign in, "
+            "then save that session and start scanning.</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            "<div class='small-note'>Outlook profile detected. The button will start or resume the forwarder.</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# === Card 3: Activity log ===
+st.markdown("---")
+
+log_card = st.container()
+with log_card:
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    header_cols = st.columns([1.4, 0.6, 0.6])
+    with header_cols[0]:
+        st.markdown("<div class='section-title'>Log</div>", unsafe_allow_html=True)
+    with header_cols[1]:
         live_refresh = st.checkbox(
             "Live refresh",
             value=st.session_state.get("tab_focused", True) and running,
-            help="When enabled, the log view auto-refreshes whenever this tab stays in focus.",
+            help="If enabled, the log view auto-refreshes when this tab is focused.",
         )
         st.session_state["live_refresh"] = live_refresh
+    with header_cols[2]:
+        if st.button("Refresh now"):
+            st.rerun()
+
+    log_container = st.empty()
+    with LOG_LOCK:
+        log_lines = list(LOG_BUFFER)
+    log_container.code("\n".join(log_lines[-200:]) or "No logs yet.", language="text")
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown("---")
-
-log_container = st.empty()
-with LOG_LOCK:
-    log_lines = list(LOG_BUFFER)
-log_container.code("\n".join(log_lines[-200:]) or "No logs yet.", language="text")
-
+# Auto-refresh ping for logs when running & live-refresh is on
 if (
     AUTOMATION_STATE.running
     and st.session_state.get("live_refresh")
@@ -1100,8 +1168,4 @@ if (
         height=0,
     )
 
-if st.button("Refresh logs", help="Manual refresh to keep resource usage low when unfocused."):
-    st.rerun()
-
 st.markdown("[View the project on GitHub](https://github.com/Skytheredhead/outlookscrape)")
-
