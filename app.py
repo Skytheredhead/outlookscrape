@@ -59,13 +59,25 @@ ENCRYPTED_CREDENTIALS_PATH = DATA_DIR / "outlook.enc"
 FORWARDED_LOG_PATH = DATA_DIR / "forwarded.json"
 FORWARD_STATE_PATH = DATA_DIR / "daily_counter.json"
 SETTINGS_PATH = DATA_DIR / "settings.json"
+GOOGLE_TOKEN_PATH = DATA_DIR / "token.json"
 
 OUTLOOK_LOGIN_URL = "https://outlook.office.com/mail/"
 OUTLOOK_INBOX_URL = "https://outlook.office.com/mail/inbox"
 OUTLOOK_JUNK_URL = "https://outlook.office.com/mail/junkemail"
+OUTLOOK_SENT_URL = "https://outlook.office.com/mail/sentitems"
+OUTLOOK_DRAFTS_URL = "https://outlook.office.com/mail/drafts"
+OUTLOOK_DELETED_URL = "https://outlook.office.com/mail/deleteditems"
+OUTLOOK_ARCHIVE_URL = "https://outlook.office.com/mail/archive"
+OUTLOOK_OUTBOX_URL = "https://outlook.office.com/mail/outbox"
+
 OUTLOOK_FOLDERS = [
     ("Inbox", OUTLOOK_INBOX_URL),
     ("Junk Email", OUTLOOK_JUNK_URL),
+    ("Sent Items", OUTLOOK_SENT_URL),
+    ("Drafts", OUTLOOK_DRAFTS_URL),
+    ("Deleted Items", OUTLOOK_DELETED_URL),
+    ("Archive", OUTLOOK_ARCHIVE_URL),
+    ("Outbox", OUTLOOK_OUTBOX_URL),
 ]
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
@@ -244,19 +256,54 @@ class GmailForwarder:
         self.settings = settings
         self._service = None
         self.lock = threading.Lock()
+        self._client_secret_path: Optional[Path] = None
+
+    def _resolve_client_secret_file(self) -> Path:
+        if self._client_secret_path and self._client_secret_path.exists():
+            return self._client_secret_path
+
+        default_path = BASE_DIR / "credentials.json"
+        if default_path.exists():
+            self._client_secret_path = default_path
+            log_message(f"Using Google client secret file: {default_path.name}")
+            return default_path
+
+        candidate_dirs = [BASE_DIR, DATA_DIR]
+        candidate_files: List[Path] = []
+        for directory in candidate_dirs:
+            if not directory.exists():
+                continue
+            for path in directory.glob("*.json"):
+                if path.name.endswith(".apps.googleusercontent.com.json"):
+                    candidate_files.append(path)
+            for path in directory.glob("*.apps.googleusercontent.com"):
+                if path.is_file():
+                    candidate_files.append(path)
+
+        if candidate_files:
+            candidate_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            self._client_secret_path = candidate_files[0]
+            log_message(f"Using Google client secret file: {self._client_secret_path.name}")
+            return self._client_secret_path
+
+        raise FileNotFoundError(
+            "Google OAuth client secret JSON not found. Place your downloaded client secret file "
+            "(e.g., client_secret_XXXX.apps.googleusercontent.com.json) in the project folder."
+        )
 
     def _build_service(self):
         creds = None
-        if Path("token.json").exists():
-            creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+        if GOOGLE_TOKEN_PATH.exists():
+            creds = Credentials.from_authorized_user_file(str(GOOGLE_TOKEN_PATH), SCOPES)
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                # The credentials.json file must be downloaded from Google Cloud console.
-                flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+                client_secret_path = self._resolve_client_secret_file()
+                flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path), SCOPES)
                 creds = flow.run_local_server(port=0)
-            with open("token.json", "w", encoding="utf-8") as token:
+            GOOGLE_TOKEN_PATH.parent.mkdir(exist_ok=True)
+            with GOOGLE_TOKEN_PATH.open("w", encoding="utf-8") as token:
                 token.write(creds.to_json())
         return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
@@ -334,9 +381,18 @@ class OutlookAutomation:
             shutil.which("msedge"),
             shutil.which("msedge.exe"),
         ]
+        windows_defaults = [
+            Path(os.environ.get("PROGRAMFILES", "")) / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
+        ]
+        for candidate in windows_defaults:
+            if candidate and candidate.is_file():
+                binary_candidates.append(str(candidate))
         binary_location = next((candidate for candidate in binary_candidates if candidate), None)
         if binary_location:
             options.binary_location = binary_location
+            log_message(f"Using Chrome binary at: {binary_location}")
         else:
             log_message(
                 "Chrome binary not found automatically. Attempting to start ChromeDriver without an explicit binary path."
@@ -372,16 +428,19 @@ class OutlookAutomation:
         log_message("Saved Outlook cookies to disk.")
 
     def launch_manual_login(self) -> None:
-        if MANUAL_DRIVER_HOLDER["driver"]:
+        existing_driver = MANUAL_DRIVER_HOLDER.get("driver") or st.session_state.get("manual_driver")
+        if existing_driver:
+            MANUAL_DRIVER_HOLDER["driver"] = existing_driver
             log_message("Manual login window already open.")
             return
         driver = self._create_driver(headless=False)
         MANUAL_DRIVER_HOLDER["driver"] = driver
+        st.session_state["manual_driver"] = driver
         log_message("Manual Chrome window launched. Complete login and then click 'Save cookies'.")
         driver.get(OUTLOOK_LOGIN_URL)
 
     def complete_manual_login(self) -> None:
-        driver = MANUAL_DRIVER_HOLDER.get("driver")
+        driver = MANUAL_DRIVER_HOLDER.get("driver") or st.session_state.get("manual_driver")
         if not driver:
             log_message("No manual Chrome session is active.")
             return
@@ -393,6 +452,7 @@ class OutlookAutomation:
             except Exception:  # noqa: BLE001
                 pass
             MANUAL_DRIVER_HOLDER["driver"] = None
+            st.session_state.pop("manual_driver", None)
         MANUAL_LOGIN_EVENT.clear()
 
     def _detect_captcha(self, driver: webdriver.Chrome) -> bool:
@@ -510,6 +570,11 @@ def worker_loop(stop_event: threading.Event, manual_event: threading.Event) -> N
         log_message("Target Gmail address not set. Stopping worker.")
         AUTOMATION_STATE.running = False
         return
+    if not COOKIES_PATH.exists():
+        log_message("Cookie file missing. Launch manual login and save cookies before starting automation.")
+        manual_event.set()
+        AUTOMATION_STATE.running = False
+        return
     log_message("Automation worker started.")
     while not stop_event.is_set():
         now = datetime.now(timezone.utc)
@@ -547,6 +612,11 @@ def worker_loop(stop_event: threading.Event, manual_event: threading.Event) -> N
             except Exception:
                 pass
             AUTOMATION_STATE.cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=30)
+        except FileNotFoundError as exc:
+            log_message(str(exc))
+            manual_event.set()
+            AUTOMATION_STATE.running = False
+            return
         except Exception as exc:  # noqa: BLE001
             log_message(f"Unexpected error: {exc}")
             AUTOMATION_STATE.cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=10)
@@ -570,6 +640,9 @@ def run_single_check() -> Tuple[bool, str]:
     target_email = settings.get("target_email")
     if not target_email:
         return False, "Please save your target Gmail address first."
+    if not COOKIES_PATH.exists():
+        MANUAL_LOGIN_EVENT.set()
+        return False, "Cookies not found. Launch the manual login, save cookies, and try again."
 
     registry = AUTOMATION_STATE.registry
     counter = AUTOMATION_STATE.counter
@@ -608,6 +681,9 @@ def run_single_check() -> Tuple[bool, str]:
         log_message(f"Manual check detected CAPTCHA: {exc}")
         AUTOMATION_STATE.cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=30)
         return False, "CAPTCHA detected. Please complete the manual login flow."
+    except FileNotFoundError as exc:
+        log_message(str(exc))
+        return False, str(exc)
     except Exception as exc:  # noqa: BLE001
         log_message(f"Manual check failed: {exc}")
         return False, f"Manual check failed: {exc}"
@@ -622,11 +698,8 @@ def run_single_check() -> Tuple[bool, str]:
 def send_gmail_test_email(target_email: str, success_message: str) -> None:
     try:
         AUTOMATION_STATE.gmail_forwarder.send_test_email(target_email)
-    except FileNotFoundError:
-        message = (
-            "Google API token not found. Place your credentials.json in the project directory "
-            "and authorize the Gmail API before sending test emails."
-        )
+    except FileNotFoundError as exc:
+        message = str(exc)
         st.warning(message)
         log_message(message)
     except HttpError as exc:
@@ -682,7 +755,7 @@ with st.expander("Setup checklist", expanded=False):
     st.markdown(
         """
         1. Install the dependencies listed at the top of this script.
-        2. Download your `credentials.json` from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) for the Gmail API.
+        2. Download your `credentials.json` (or the `client_secret_*.apps.googleusercontent.com.json` file) from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) for the Gmail API and place it alongside this script.
         3. Run `streamlit run app.py`.
         4. Provide your Outlook credentials below (encrypted with Fernet).
         5. Click **Launch Manual Login** to open Chrome (non-headless), sign in, then click **Save Cookies**.
@@ -781,6 +854,9 @@ with start_col:
     if st.button("▶️ Start scanning", disabled=AUTOMATION_STATE.running):
         if not settings_manager.get("target_email"):
             st.error("Please save your target Gmail address first.")
+        elif not COOKIES_PATH.exists():
+            MANUAL_LOGIN_EVENT.set()
+            st.error("Cookies not found. Launch the manual login window and save cookies before starting.")
         else:
             STOP_EVENT.clear()
             MANUAL_LOGIN_EVENT.clear()
@@ -805,11 +881,15 @@ with stop_col:
 
 with check_col:
     if st.button("🔍 Run a check", disabled=AUTOMATION_STATE.running):
-        success, message = run_single_check()
-        if success:
-            st.success(message)
+        if not COOKIES_PATH.exists():
+            MANUAL_LOGIN_EVENT.set()
+            st.error("Cookies not found. Launch the manual login window and save cookies before running a check.")
         else:
-            st.error(message)
+            success, message = run_single_check()
+            if success:
+                st.success(message)
+            else:
+                st.error(message)
 
 st.markdown("---")
 
