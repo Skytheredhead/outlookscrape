@@ -821,7 +821,7 @@ def handle_open_outlook_and_start() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# Streamlit UI
+# Streamlit UI (light theme)
 # --------------------------------------------------------------------------------------
 
 st.set_page_config(
@@ -830,202 +830,192 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- Global dark styling ---
+# --- Global light styling ---
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-    :root {
-        color-scheme: dark;
-        --accent: #38bdf8;
-        --accent-strong: #6366f1;
-        --accent-glow: rgba(56, 189, 248, 0.45);
-        --surface: rgba(15, 23, 42, 0.78);
-        --surface-strong: rgba(15, 23, 42, 0.92);
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    html, body, .stApp {
+        font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        background-color: #f5f5f8;
     }
-    html, body, .stApp, [data-testid="stAppViewContainer"] {
-        background-color: #000000 !important;
-        font-family: 'Inter', sans-serif;
-    }
-    div[data-testid="stAppViewContainer"] > .main {
-        position: relative;
-        background: radial-gradient(circle at top, rgba(59, 130, 246, 0.18), transparent 55%), #000000;
-        color: #e2e8f0;
+
+    [data-testid="stAppViewContainer"] > .main {
         padding-top: 0.5rem;
     }
-    div[data-testid="stAppViewContainer"] > .main::before,
-    div[data-testid="stAppViewContainer"] > .main::after {
-        content: "";
-        position: fixed;
-        width: 60vw;
-        height: 60vw;
-        border-radius: 50%;
-        filter: blur(140px);
-        opacity: 0.55;
-        z-index: 0;
-        pointer-events: none;
-        transition: opacity 0.6s ease;
-    }
-    div[data-testid="stAppViewContainer"] > .main::before {
-        top: -18vw;
-        right: -22vw;
-        background: radial-gradient(circle, rgba(99, 102, 241, 0.65), transparent 60%);
-    }
-    div[data-testid="stAppViewContainer"] > .main::after {
-        bottom: -24vw;
-        left: -18vw;
-        background: radial-gradient(circle, rgba(56, 189, 248, 0.6), transparent 60%);
-    }
+
     div.block-container {
-        padding-top: 0.7rem;
-        padding-bottom: 2.4rem;
-        max-width: 1140px;
-        position: relative;
-        z-index: 1;
+        max-width: 1100px;
+        padding-top: 0.75rem;
+        padding-bottom: 2.5rem;
     }
-    div[data-testid="stHeader"] {background: transparent;}
-    .page-title {
-        font-size: 2rem;
-        font-weight: 800;
-        color: #f8fafc;
-        margin-bottom: 0.12rem;
+
+    div[data-testid="stHeader"] {
+        background: transparent;
+    }
+
+    .app-title {
+        font-size: 1.9rem;
+        font-weight: 700;
+        color: #111827;
+        margin-bottom: 0.1rem;
         letter-spacing: -0.01em;
     }
-    .page-subtitle {
-        color: #94a3b8;
-        font-size: 1rem;
-        margin-bottom: 1.1rem;
+
+    .app-subtitle {
+        font-size: 0.95rem;
+        color: #4b5563;
+        margin-bottom: 0.9rem;
     }
+
     .card {
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.82), rgba(15, 23, 42, 0.92));
-        border-radius: 1rem;
-        padding: 1rem 1.25rem;
-        box-shadow: 0 22px 48px rgba(2, 6, 23, 0.65);
+        background-color: #ffffff;
+        border-radius: 0.9rem;
+        padding: 1rem 1.2rem;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
         margin-bottom: 1rem;
-        border: 1px solid rgba(148, 163, 184, 0.2);
-        backdrop-filter: blur(16px);
     }
-    .card:hover {
-        border-color: rgba(148, 163, 184, 0.35);
-        box-shadow: 0 28px 60px rgba(59, 130, 246, 0.18);
-        transition: box-shadow 0.3s ease, border-color 0.3s ease;
-    }
+
     .section-title {
-        font-size: 0.85rem;
+        font-size: 0.8rem;
+        font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 0.14em;
-        color: #bae6fd;
-        margin-bottom: 0.55rem;
-        font-weight: 600;
+        letter-spacing: 0.12em;
+        color: #6b7280;
+        margin-bottom: 0.4rem;
     }
-    .stButton>button {
-        background: linear-gradient(135deg, rgba(56, 189, 248, 0.92) 0%, rgba(99, 102, 241, 0.96) 100%);
-        color: #020617;
-        border-radius: 0.75rem;
-        border: none;
-        font-weight: 600;
-        font-size: 0.92rem;
-        padding: 0.5rem 0.95rem;
-        transition: transform 0.18s ease, filter 0.18s ease, box-shadow 0.18s ease;
-        box-shadow: 0 16px 36px rgba(56, 189, 248, 0.4);
-    }
-    .stButton>button:disabled {
-        background: rgba(30, 41, 59, 0.85);
-        color: #64748b;
-        box-shadow: none;
-    }
-    .stButton>button:not(:disabled):hover {
-        transform: translateY(-2px) scale(1.01);
-        filter: brightness(1.07);
-    }
-    .stButton>button:not(:disabled):active {
-        transform: translateY(0);
-        filter: brightness(0.96);
-    }
-    div[data-baseweb="input"] input {
-        background: var(--surface);
-        border-radius: 0.7rem !important;
-        border: 1px solid rgba(148, 163, 184, 0.45);
-        color: #e2e8f0 !important;
-        padding: 0.5rem 0.9rem !important;
-        font-size: 0.92rem !important;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    div[data-baseweb="input"] input:focus {
-        border-color: rgba(94, 234, 212, 0.8);
-        box-shadow: 0 0 0 2px rgba(94, 234, 212, 0.35);
-    }
-    div[data-baseweb="input"] input::placeholder {
-        color: rgba(148, 163, 184, 0.7);
-    }
-    div[data-baseweb="slider"] {
-        padding: 0.25rem 0.4rem 0.1rem;
-    }
-    div[data-baseweb="slider"] [role="slider"] {
-        background: linear-gradient(135deg, rgba(56, 189, 248, 1) 0%, rgba(99, 102, 241, 1) 100%) !important;
-        box-shadow: 0 10px 20px rgba(56, 189, 248, 0.35);
-    }
-    div[data-baseweb="slider"] > div > div {
-        background: rgba(56, 189, 248, 0.35) !important;
-    }
+
     .small-note {
         font-size: 0.8rem;
-        color: rgba(148, 163, 184, 0.95);
-        margin-top: 0.3rem;
+        color: #6b7280;
+        margin-top: 0.25rem;
     }
-    .pill {
+
+    .status-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        margin-top: 0.15rem;
+        margin-bottom: 0.4rem;
+    }
+
+    .status-pill {
         display: inline-flex;
         align-items: center;
-        gap: 0.35rem;
-        background: rgba(15, 23, 42, 0.94);
-        border: 1px solid rgba(148, 163, 184, 0.6);
-        color: #e5e7eb;
         border-radius: 999px;
-        padding: 0.18rem 0.75rem;
-        font-size: 0.78rem;
-        font-weight: 600;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
+        padding: 0.12rem 0.6rem;
+        font-size: 0.75rem;
+        font-weight: 500;
+        border: 1px solid #e5e7eb;
+        background-color: #f9fafb;
+        color: #374151;
     }
-    div[data-testid="stMetric"] {
-        background: linear-gradient(135deg, rgba(17, 24, 39, 0.88), rgba(30, 41, 59, 0.9));
-        border-radius: 0.85rem;
-        border: 1px solid rgba(51, 65, 85, 0.9);
-        padding: 0.35rem 0.6rem;
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+    .status-pill.ok {
+        border-color: #bbf7d0;
+        background-color: #f0fdf4;
+        color: #166534;
     }
-    div[data-testid="stMetricLabel"] > div {
-        color: #9ca3af;
-        font-size: 0.76rem;
-        letter-spacing: 0.1em;
+
+    .status-pill.warn {
+        border-color: #fed7aa;
+        background-color: #fffbeb;
+        color: #92400e;
     }
-    div[data-testid="stMetricValue"] > div {
-        color: #f9fafb;
-        font-size: 1.38rem;
-        font-weight: 700;
+
+    .primary-action button {
+        background-color: #2563eb !important;
+        color: #ffffff !important;
+        border-radius: 0.6rem !important;
+        border: 1px solid #1d4ed8 !important;
+        font-weight: 600 !important;
+        font-size: 0.9rem !important;
     }
-    .stCheckbox label {
-        color: #e2e8f0 !important;
-        font-size: 0.85rem !important;
+
+    .primary-action button:hover:not(:disabled) {
+        background-color: #1d4ed8 !important;
     }
+
+    .secondary-action button {
+        background-color: #ffffff !important;
+        color: #111827 !important;
+        border-radius: 0.6rem !important;
+        border: 1px solid #d1d5db !important;
+        font-weight: 500 !important;
+        font-size: 0.88rem !important;
+    }
+
+    .secondary-action button:hover:not(:disabled) {
+        background-color: #f3f4f6 !important;
+    }
+
+    .danger-action button {
+        background-color: #fee2e2 !important;
+        color: #b91c1c !important;
+        border-radius: 0.6rem !important;
+        border: 1px solid #fecaca !important;
+        font-weight: 500 !important;
+        font-size: 0.88rem !important;
+    }
+
+    .danger-action button:hover:not(:disabled) {
+        background-color: #fecaca !important;
+    }
+
+    div[data-baseweb="input"] input {
+        border-radius: 0.55rem !important;
+        border: 1px solid #d1d5db !important;
+        padding: 0.45rem 0.75rem !important;
+        font-size: 0.9rem !important;
+    }
+
+    div[data-baseweb="input"] input:focus {
+        border-color: #2563eb !important;
+        box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.25);
+    }
+
+    div[data-baseweb="slider"] {
+        padding-top: 0.15rem;
+    }
+
     pre, code {
-        background-color: rgba(15, 23, 42, 0.96) !important;
-        color: #e2e8f0 !important;
-        border-radius: 0.75rem;
-        padding: 0.9rem !important;
-        box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.6);
+        border-radius: 0.5rem !important;
     }
+
     .stExpander {
-        border-radius: 0.9rem !important;
-        overflow: hidden;
-        border: 1px solid rgba(148, 163, 184, 0.2) !important;
-        background: rgba(15, 23, 42, 0.9);
+        border-radius: 0.7rem !important;
+        border: 1px solid #e5e7eb !important;
+        background-color: #ffffff !important;
     }
-    .stExpander > div {
-        background: transparent !important;
-    }
+
     a, .stMarkdown a {
-        color: #38bdf8;
+        color: #2563eb;
+        text-decoration: none;
+        font-weight: 500;
+    }
+
+    a:hover, .stMarkdown a:hover {
+        text-decoration: underline;
+    }
+
+    /* Metric cards */
+    div[data-testid="stMetric"] {
+        background-color: #f9fafb;
+        border-radius: 0.7rem;
+        border: 1px solid #e5e7eb;
+        padding: 0.4rem 0.7rem;
+    }
+
+    div[data-testid="stMetricLabel"] > div {
+        font-size: 0.78rem;
+        color: #6b7280;
+    }
+
+    div[data-testid="stMetricValue"] > div {
+        font-size: 1.25rem;
+        color: #111827;
         font-weight: 600;
     }
     </style>
@@ -1054,19 +1044,19 @@ is_focused = True if focus_state is None else bool(focus_state)
 st.session_state["tab_focused"] = is_focused
 
 # --- Title ---
-st.markdown("<div class='page-title'>📬 Outlook ➜ Gmail Forwarder</div>", unsafe_allow_html=True)
+st.markdown("<div class='app-title'>📬 Outlook ➜ Gmail Forwarder</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='page-subtitle'>Keep Outlook open in the background. This page forwards new mail into Gmail.</div>",
+    "<div class='app-subtitle'>Forward new Outlook messages into Gmail while Outlook runs in the background.</div>",
     unsafe_allow_html=True,
 )
 
-with st.expander("Quick setup", expanded=False):
+with st.expander("How to set this up", expanded=False):
     st.markdown(
         """
         1. Install the Python packages listed at the top of the script.  
-        2. Put your Gmail API `credentials.json` next to this file.  
-        3. Enter the Gmail address below.  
-        4. Click **Open Outlook & Start** and follow the prompts.
+        2. Place your Gmail API `credentials.json` next to this file.  
+        3. Enter the Gmail address that should receive forwarded mail.  
+        4. Click **Open Outlook & Start** and follow the prompts in the Outlook window.
         """
     )
 
@@ -1082,17 +1072,17 @@ if polling_max_saved < polling_min_saved:
 profile_ready = AUTOMATION_STATE.outlook.profile_ready()
 running = AUTOMATION_STATE.running
 
-# === Card 1: Gmail & cadence / Status ===
+# === Top section: Gmail + status ===
 with st.container():
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    top_cols = st.columns([1.5, 1])
+    top_cols = st.columns([1.6, 1.1])
 
     # Left: Gmail + cadence
     with top_cols[0]:
-        st.markdown("<div class='section-title'>Delivery</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Step 1 · Where to send mail</div>", unsafe_allow_html=True)
 
         updated_email = st.text_input(
-            "Gmail address that should receive forwarded mail",
+            "Gmail address to receive forwarded messages",
             value=target_email,
             placeholder="you@example.com",
         )
@@ -1101,17 +1091,21 @@ with st.container():
         normalized_input = (updated_email or "").strip()
         save_disabled = normalized_input.lower() == normalized_saved
 
-        btn_cols = st.columns([1.1, 1])
-        with btn_cols[0]:
-            if st.button("Save Gmail address", disabled=save_disabled):
+        btn_row = st.columns([1, 1])
+        with btn_row[0]:
+            st.markdown("<div class='secondary-action'>", unsafe_allow_html=True)
+            if st.button("Save Gmail address", disabled=save_disabled, use_container_width=True):
                 if normalized_input:
                     settings_manager.set("target_email", normalized_input)
                     target_email = normalized_input
-                    st.success("Saved.")
+                    st.success("Gmail address saved.")
                 else:
                     st.error("Enter a valid Gmail address first.")
-        with btn_cols[1]:
-            if st.button("Send test email"):
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with btn_row[1]:
+            st.markdown("<div class='secondary-action'>", unsafe_allow_html=True)
+            if st.button("Send test email", use_container_width=True):
                 if normalized_input:
                     settings_manager.set("target_email", normalized_input)
                     target_email = normalized_input
@@ -1121,45 +1115,54 @@ with st.container():
                     )
                 else:
                     st.error("Enter a Gmail address before sending a test.")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("<div class='small-note'>For best results, use a dedicated Gmail account for forwarding.</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='small-note'>Tip: use a dedicated Gmail account for this forwarder.</div>",
+            unsafe_allow_html=True,
+        )
 
-        st.markdown("<div class='section-title' style='margin-top:0.8rem;'>Cadence</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title' style='margin-top:0.7rem;'>Scan interval</div>", unsafe_allow_html=True)
         polling_min, polling_max = st.slider(
-            "Scan interval (minutes, random in this range)",
+            "Minutes between Outlook checks (random within this range)",
             min_value=1,
             max_value=30,
             value=(polling_min_saved, polling_max_saved),
-            help="The worker sleeps a random duration within this range between checks.",
+            help="The worker sleeps a random duration in this range between checks.",
         )
         if (polling_min, polling_max) != (polling_min_saved, polling_max_saved):
             settings_manager.set("polling_min_minutes", polling_min)
             settings_manager.set("polling_max_minutes", polling_max)
-            note = "Updated polling cadence saved."
+            note = "Updated polling interval saved."
         else:
-            note = f"Currently pausing between {polling_min}–{polling_max} minutes."
+            note = f"Currently pausing between {polling_min} and {polling_max} minutes."
         st.markdown(f"<div class='small-note'>{note}</div>", unsafe_allow_html=True)
 
-    # Right: high-level metrics
+    # Right: status / metrics
     with top_cols[1]:
         st.markdown("<div class='section-title'>Status</div>", unsafe_allow_html=True)
 
-        status_pill_parts = []
-        if target_email:
-            status_pill_parts.append("Gmail ✔")
-        else:
-            status_pill_parts.append("Gmail ⚠")
-        if profile_ready:
-            status_pill_parts.append("Outlook ✔")
-        else:
-            status_pill_parts.append("Outlook ⚠")
-        if running:
-            status_pill_parts.append("Running ▶")
-        else:
-            status_pill_parts.append("Idle ⏸")
+        st.markdown("<div class='status-row'>", unsafe_allow_html=True)
+        gmail_ok = bool(target_email)
+        outlook_ok = profile_ready
 
-        pill_text = " · ".join(status_pill_parts)
-        st.markdown(f"<span class='pill'>{pill_text}</span>", unsafe_allow_html=True)
+        gmail_class = "ok" if gmail_ok else "warn"
+        outlook_class = "ok" if outlook_ok else "warn"
+        running_class = "ok" if running else ""
+
+        st.markdown(
+            f"<span class='status-pill {gmail_class}'>Gmail: {'set' if gmail_ok else 'not set'}</span>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<span class='status-pill {outlook_class}'>Outlook profile: {'ready' if outlook_ok else 'not ready'}</span>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<span class='status-pill {running_class}'>Automation: {'running' if running else 'stopped'}</span>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
         metric_cols = st.columns(3)
         with metric_cols[0]:
@@ -1176,74 +1179,88 @@ with st.container():
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# === Card 2: Outlook & automation controls (single primary button) ===
+# === Automation controls ===
 with st.container():
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>Outlook & automation</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Step 2 · Start forwarding</div>", unsafe_allow_html=True)
 
-    # Main controls row
     ctrl_cols = st.columns([1.4, 0.9, 0.9])
+
+    # Main CTA
     with ctrl_cols[0]:
-        if st.button("🚀 Open Outlook & Start", disabled=False if not running else True, use_container_width=True):
+        st.markdown("<div class='primary-action'>", unsafe_allow_html=True)
+        if st.button("Open Outlook & Start", disabled=running, use_container_width=True):
             handle_open_outlook_and_start()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Stop
     with ctrl_cols[1]:
-        if st.button("⏹ Stop", disabled=not running, use_container_width=True):
+        st.markdown("<div class='danger-action'>", unsafe_allow_html=True)
+        if st.button("Stop automation", disabled=not running, use_container_width=True):
             STOP_EVENT.set()
             if WORKER_THREAD and WORKER_THREAD.is_alive():
                 WORKER_THREAD.join(timeout=2)
             AUTOMATION_STATE.running = False
             st.info("Automation stop requested.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # One-off check
     with ctrl_cols[2]:
-        if st.button("🔍 Run one check", disabled=running, use_container_width=True):
+        st.markdown("<div class='secondary-action'>", unsafe_allow_html=True)
+        if st.button("Run one check", disabled=running, use_container_width=True):
             if not AUTOMATION_STATE.outlook.profile_ready():
                 MANUAL_LOGIN_EVENT.set()
-                st.error("Outlook profile not found. Use “Open Outlook & Start” to create it first.")
+                st.error("Outlook profile not found. Use “Open Outlook & Start” first.")
             else:
                 success, message = run_single_check()
                 if success:
                     st.success(message)
                 else:
                     st.error(message)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    # Simple helper text
+    # Helper text about manual login / profile state
     if MANUAL_LOGIN_EVENT.is_set():
         st.warning(
-            "Manual Outlook login required. When the Outlook window opens, sign in completely, "
+            "Manual Outlook login required. When the Outlook window opens, sign in fully, "
             "then click “Open Outlook & Start” again."
         )
     elif not profile_ready:
         st.markdown(
-            "<div class='small-note'>First run: the button will open Outlook so you can sign in, "
-            "then save that session and start scanning.</div>",
+            "<div class='small-note'>On first run, the button opens Outlook so you can sign in. "
+            "After saving the session, automation can run in the background.</div>",
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
-            "<div class='small-note'>Outlook profile detected. The button will start or resume the forwarder.</div>",
+            "<div class='small-note'>Outlook profile is ready. Use the buttons above to start, stop, "
+            "or run a single check.</div>",
             unsafe_allow_html=True,
         )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# === Card 3: Activity log ===
-st.markdown("---")
-
-log_card = st.container()
-with log_card:
+# === Activity log ===
+with st.container():
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    header_cols = st.columns([1.4, 0.6, 0.6])
+    header_cols = st.columns([1.3, 0.8, 0.7])
+
     with header_cols[0]:
-        st.markdown("<div class='section-title'>Log</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Activity log</div>", unsafe_allow_html=True)
+
     with header_cols[1]:
         live_refresh = st.checkbox(
-            "Live refresh",
+            "Auto-refresh when tab is focused",
             value=st.session_state.get("tab_focused", True) and running,
-            help="If enabled, the log view auto-refreshes when this tab is focused.",
+            help="If enabled, the log view auto-refreshes while this tab is active and automation is running.",
         )
         st.session_state["live_refresh"] = live_refresh
+
     with header_cols[2]:
-        if st.button("Refresh now"):
+        st.markdown("<div class='secondary-action'>", unsafe_allow_html=True)
+        if st.button("Refresh log", use_container_width=True):
             st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
     log_container = st.empty()
     with LOG_LOCK:
