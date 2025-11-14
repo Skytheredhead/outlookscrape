@@ -326,6 +326,21 @@ class GmailForwarder:
 class OutlookAutomation:
     """Selenium automation for Outlook Web."""
 
+    def _get_existing_driver(self) -> Optional[webdriver.Chrome]:
+        driver = MANUAL_DRIVER_HOLDER.get("driver")
+        if not driver:
+            return None
+        try:
+            driver.execute_script("return document.readyState")
+            return driver
+        except Exception:  # noqa: BLE001
+            try:
+                driver.quit()
+            except Exception:  # noqa: BLE001
+                pass
+            MANUAL_DRIVER_HOLDER["driver"] = None
+            return None
+
     def _create_driver(self, headless: bool = True, use_profile: bool = False) -> webdriver.Chrome:
         options = Options()
         options.add_argument("--disable-blink-features=AutomationControlled")
@@ -384,49 +399,40 @@ class OutlookAutomation:
             return False
         return any(CHROME_PROFILE_DIR.iterdir())
 
-    def launch_manual_login(self) -> None:
-        existing_driver = MANUAL_DRIVER_HOLDER.get("driver") or st.session_state.get("manual_driver")
+    def launch_manual_login(self, *, auto_open: bool = False) -> None:
+        existing_driver = self._get_existing_driver()
         if existing_driver:
-            MANUAL_DRIVER_HOLDER["driver"] = existing_driver
-            log_message("Manual login window already open.")
+            log_message("Persistent Outlook window already running.")
             return
         driver = self._create_driver(headless=False, use_profile=True)
         MANUAL_DRIVER_HOLDER["driver"] = driver
-        st.session_state["manual_driver"] = driver
-        log_message(
-            "Manual Chrome window launched with a persistent profile. Log in, solve any prompts, and then click 'Save & Close'."
-        )
-        driver.get(OUTLOOK_LOGIN_URL)
+        target_url = OUTLOOK_INBOX_URL if self.profile_ready() else OUTLOOK_LOGIN_URL
+        if auto_open:
+            log_message("Outlook window opened automatically using the saved profile.")
+        else:
+            log_message(
+                "Manual Chrome window launched with a persistent profile. Log in, solve any prompts, and then click 'Save session'."
+            )
+        driver.get(target_url)
 
     def complete_manual_login(self) -> None:
-        driver = MANUAL_DRIVER_HOLDER.get("driver") or st.session_state.get("manual_driver")
+        driver = self._get_existing_driver()
         if not driver:
             log_message("No manual Chrome session is active.")
             return
-        profile_saved = False
         try:
-            try:
-                WebDriverWait(driver, 15).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, '[role="main"]'))
-                )
-            except TimeoutException as exc:
-                raise RuntimeError(
-                    "Outlook web app not detected yet. Finish the login process before saving the session."
-                ) from exc
-            PROFILE_READY_PATH.write_text(datetime.now().isoformat())
-            log_message(
-                "Saved persistent Outlook session. Future automation runs will reuse this browser profile."
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, '[role="main"]'))
             )
-            profile_saved = True
-        finally:
-            try:
-                driver.quit()
-            except Exception:  # noqa: BLE001
-                pass
-            MANUAL_DRIVER_HOLDER["driver"] = None
-            st.session_state.pop("manual_driver", None)
-        if profile_saved:
-            MANUAL_LOGIN_EVENT.clear()
+        except TimeoutException as exc:
+            raise RuntimeError(
+                "Outlook web app not detected yet. Finish the login process before saving the session."
+            ) from exc
+        PROFILE_READY_PATH.write_text(datetime.now().isoformat())
+        log_message(
+            "Saved persistent Outlook session. Leave the Outlook window open so automation can reuse it."
+        )
+        MANUAL_LOGIN_EVENT.clear()
 
     def _detect_captcha(self, driver: webdriver.Chrome) -> bool:
         """Detect whether Outlook is presenting a bot or verification challenge."""
@@ -454,7 +460,12 @@ class OutlookAutomation:
             return False
 
     def ensure_session(self) -> webdriver.Chrome:
-        driver = self._create_driver(headless=False, use_profile=True)
+        driver = self._get_existing_driver()
+        if not driver:
+            self.launch_manual_login(auto_open=True)
+            raise ManualLoginRequired(
+                "Outlook window opened automatically. Complete the login flow and click 'Save session' before starting automation."
+            )
         try:
             driver.get(OUTLOOK_INBOX_URL)
             if self._is_login_page(driver):
@@ -467,13 +478,10 @@ class OutlookAutomation:
             log_message("Authenticated to Outlook using the persistent browser profile.")
             return driver
         except CaptchaDetected:
-            driver.quit()
             raise
         except ManualLoginRequired:
-            driver.quit()
             raise
         except Exception as exc:  # noqa: BLE001
-            driver.quit()
             raise ManualLoginRequired(
                 "Outlook session not authenticated. Launch the manual login window to refresh the Outlook profile."
             ) from exc
@@ -488,12 +496,26 @@ class OutlookAutomation:
         folders_to_check = folders or OUTLOOK_FOLDERS
         new_emails: List[EmailContent] = []
         for folder_name, folder_url in folders_to_check:
+            log_message(f"Scanning folder: {folder_name}")
             try:
                 driver.get(folder_url)
             except WebDriverException as exc:  # noqa: BLE001
                 log_message(f"Failed to open Outlook folder '{folder_name}': {exc}")
                 continue
-            human_delay(1.0, 2.0)
+            human_delay(1.0, 1.6)
+            tail = folder_url.rsplit("/", 1)[-1].lower()
+            current_url = (driver.current_url or "").lower()
+            if tail not in current_url:
+                try:
+                    nav_button = driver.find_element(
+                        By.XPATH,
+                        "//span[normalize-space()='{0}']/ancestor::button[1] | "
+                        "//span[contains(@title, '{0}')]/ancestor::button[1]".format(folder_name),
+                    )
+                    driver.execute_script("arguments[0].click();", nav_button)
+                    human_delay(0.8, 1.2)
+                except Exception as exc:  # noqa: BLE001
+                    log_message(f"Unable to switch to folder '{folder_name}' via navigation: {exc}")
             try:
                 wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="option"]')))
             except TimeoutException:
@@ -503,7 +525,9 @@ class OutlookAutomation:
             email_rows = driver.find_elements(By.CSS_SELECTOR, 'div[role="option"]')
             for row in email_rows:
                 aria_label = row.get_attribute("aria-label") or ""
-                is_unread = "unread" in (row.get_attribute("class") or "") or "unread" in aria_label.lower()
+                class_name = row.get_attribute("class") or ""
+                data_is_read = (row.get_attribute("data-isread") or "").lower()
+                is_unread = "unread" in class_name.lower() or "unread" in aria_label.lower() or data_is_read in {"false", "0"}
                 item_id = row.get_attribute("data-itemid") or row.get_attribute("aria-labelledby") or aria_label
                 if not item_id:
                     item_id = str(hash(aria_label + str(time.time())))
@@ -617,12 +641,6 @@ def worker_loop(stop_event: threading.Event, manual_event: threading.Event) -> N
         except Exception as exc:  # noqa: BLE001
             log_message(f"Unexpected error: {exc}")
             AUTOMATION_STATE.cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=10)
-        finally:
-            if driver:
-                try:
-                    driver.quit()
-                except Exception:  # noqa: BLE001
-                    pass
         if stop_event.is_set():
             break
         min_window = _coerce_minutes(settings.get("polling_min_minutes", 5), 5)
@@ -688,12 +706,6 @@ def run_single_check() -> Tuple[bool, str]:
     except Exception as exc:  # noqa: BLE001
         log_message(f"Manual check failed: {exc}")
         return False, f"Manual check failed: {exc}"
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except Exception:  # noqa: BLE001
-                pass
 
 
 def send_gmail_test_email(target_email: str, success_message: str) -> None:
@@ -729,100 +741,136 @@ st.markdown(
     """
     <style>
     :root {
-        --accent-color: #6366f1;
-        --accent-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        color-scheme: dark;
+        --accent: #38bdf8;
+        --accent-strong: #6366f1;
     }
     div[data-testid="stAppViewContainer"] > .main {
-        background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
-        padding-top: 1.5rem;
+        background: radial-gradient(circle at top, rgba(99, 102, 241, 0.2), transparent 60%), #0b1120;
+        color: #e2e8f0;
+        padding-top: 1rem;
+    }
+    div.block-container {
+        padding-top: 1rem;
+        padding-bottom: 2.4rem;
+        max-width: 1120px;
     }
     div[data-testid="stHeader"] {background: transparent;}
+    .page-title {
+        font-size: 1.9rem;
+        font-weight: 700;
+        color: #f8fafc;
+        margin-bottom: 0.2rem;
+    }
+    .page-subtitle {
+        color: #94a3b8;
+        font-size: 0.95rem;
+        margin-bottom: 1.1rem;
+    }
     .card {
-        background: rgba(255, 255, 255, 0.94);
-        border-radius: 1.25rem;
-        padding: 1.2rem 1.6rem;
-        box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
-        margin-bottom: 1.5rem;
-        backdrop-filter: blur(8px);
+        background: rgba(15, 23, 42, 0.88);
+        border-radius: 0.9rem;
+        padding: 1rem 1.2rem;
+        box-shadow: 0 18px 40px rgba(2, 6, 23, 0.45);
+        margin-bottom: 1rem;
+        border: 1px solid rgba(148, 163, 184, 0.12);
     }
     .section-title {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #312e81;
-        margin-bottom: 0.75rem;
-        letter-spacing: 0.01em;
+        font-size: 0.92rem;
         text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #bae6fd;
+        margin-bottom: 0.55rem;
     }
     .stButton>button {
-        background: var(--accent-gradient);
-        color: #fff;
-        border-radius: 999px;
+        background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+        color: #0b1120;
+        border-radius: 0.65rem;
         border: none;
         font-weight: 600;
-        padding: 0.55rem 1.6rem;
-        box-shadow: 0 12px 30px rgba(99, 102, 241, 0.25);
-        transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+        font-size: 0.9rem;
+        padding: 0.45rem 0.85rem;
+        transition: transform 0.15s ease, filter 0.15s ease;
+        box-shadow: 0 10px 24px rgba(56, 189, 248, 0.35);
     }
     .stButton>button:disabled {
-        background: linear-gradient(135deg, #c7d2fe 0%, #e0e7ff 100%);
-        color: #475569;
+        background: rgba(30, 41, 59, 0.85);
+        color: #64748b;
         box-shadow: none;
     }
     .stButton>button:not(:disabled):hover {
         transform: translateY(-1px);
-        box-shadow: 0 16px 35px rgba(99, 102, 241, 0.32);
-        opacity: 0.95;
+        filter: brightness(1.05);
     }
     .stButton>button:not(:disabled):active {
         transform: translateY(0);
-        box-shadow: 0 10px 24px rgba(79, 70, 229, 0.28);
-    }
-    div[data-testid="stMetric"] {
-        background: rgba(255, 255, 255, 0.95);
-        border-radius: 1rem;
-        padding: 1rem;
-        box-shadow: 0 12px 25px rgba(79, 70, 229, 0.12);
-    }
-    div[data-testid="stMetricLabel"] > div {
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        color: #4c1d95;
-        letter-spacing: 0.08em;
-    }
-    div[data-testid="stMetricValue"] > div {
-        font-size: 1.75rem;
-        font-weight: 700;
-        color: #0f172a;
     }
     div[data-baseweb="input"] input {
-        border-radius: 999px !important;
-        padding: 0.6rem 1rem !important;
+        background: rgba(15, 23, 42, 0.65);
+        border-radius: 0.65rem !important;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        color: #e2e8f0 !important;
+        padding: 0.48rem 0.85rem !important;
+    }
+    div[data-baseweb="input"] input::placeholder {
+        color: #64748b;
     }
     div[data-baseweb="slider"] {
-        padding-top: 0.25rem;
+        padding: 0.3rem 0.35rem 0.1rem;
     }
     .small-note {
-        font-size: 0.85rem;
-        color: #475569;
+        font-size: 0.78rem;
+        color: #94a3b8;
+        margin-top: 0.3rem;
     }
     .pill {
         display: inline-flex;
         align-items: center;
         gap: 0.35rem;
-        background: rgba(99, 102, 241, 0.12);
-        color: #4338ca;
+        background: rgba(56, 189, 248, 0.18);
+        color: #e0f2fe;
         border-radius: 999px;
-        padding: 0.25rem 0.75rem;
-        font-size: 0.8rem;
+        padding: 0.18rem 0.75rem;
+        font-size: 0.75rem;
         font-weight: 600;
+        letter-spacing: 0.03em;
+    }
+    div[data-testid="stMetric"] {
+        background: rgba(15, 23, 42, 0.78);
+        border-radius: 0.75rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+    }
+    div[data-testid="stMetricLabel"] > div {
+        color: #94a3b8;
+        font-size: 0.75rem;
+        letter-spacing: 0.08em;
+    }
+    div[data-testid="stMetricValue"] > div {
+        color: #f8fafc;
+        font-size: 1.45rem;
+        font-weight: 700;
+    }
+    .stCheckbox>label {
+        color: #cbd5f5;
+        font-size: 0.84rem;
+    }
+    pre, code {
+        background-color: rgba(15, 23, 42, 0.85) !important;
+        color: #e2e8f0 !important;
+    }
+    a, .stMarkdown a {
+        color: #38bdf8;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.title("📬 Outlook ➜ Gmail Forwarder")
-st.caption("A curated control center for forwarding Outlook mail into Gmail without the busywork.")
+st.markdown("<div class='page-title'>📬 Outlook ➜ Gmail Forwarder</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='page-subtitle'>A compact command center for relaying Outlook messages into Gmail on your terms.</div>",
+    unsafe_allow_html=True,
+)
 
 focus_state = components.html(
     """
@@ -853,12 +901,25 @@ with st.expander("Setup checklist", expanded=False):
         2. Download your `credentials.json` (or the `client_secret_*.apps.googleusercontent.com.json` file) from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) for the Gmail API and place it alongside this script.
         3. Run `streamlit run app.py` (or double-click `run_app.bat` on Windows).
         4. Enter the Gmail address that should receive forwarded messages and save it.
-        5. Click **Login to Outlook** to open Chrome (non-headless), sign in completely, then click **Save & Close** to persist the profile.
+        5. Click **Login to Outlook** to open Chrome (non-headless), sign in completely, then click **Save session** to persist the profile and keep the window open.
         6. Press **Start scanning** (or **Run a check**) once the status indicators show that everything is ready.
         """
     )
 
 settings_manager = AUTOMATION_STATE.settings
+
+if "auto_outlook_open_attempted" not in st.session_state:
+    st.session_state["auto_outlook_open_attempted"] = False
+
+profile_ready = AUTOMATION_STATE.outlook.profile_ready()
+if profile_ready and not st.session_state["auto_outlook_open_attempted"]:
+    st.session_state["auto_outlook_open_attempted"] = True
+    try:
+        AUTOMATION_STATE.outlook.launch_manual_login(auto_open=True)
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Unable to auto-open Outlook window: {exc}")
+elif not profile_ready:
+    st.session_state["auto_outlook_open_attempted"] = False
 
 target_email = settings_manager.get("target_email", "") or ""
 polling_min_saved = _coerce_minutes(settings_manager.get("polling_min_minutes", 5), 5)
@@ -876,22 +937,28 @@ with st.container():
             value=target_email,
             placeholder="you@example.com",
         )
+        normalized_saved = (target_email or "").strip().lower()
+        normalized_input = (updated_email or "").strip()
+        save_disabled = normalized_input.lower() == normalized_saved
         button_cols = st.columns(2)
         with button_cols[0]:
-            if st.button("Save Gmail address", use_container_width=True):
-                if updated_email:
-                    settings_manager.set("target_email", updated_email)
-                    target_email = updated_email
+            if st.button(
+                "Save Gmail address",
+                disabled=save_disabled,
+            ):
+                if normalized_input:
+                    settings_manager.set("target_email", normalized_input)
+                    target_email = normalized_input
                     st.success("Saved! Use the test button to confirm Gmail delivery when ready.")
                 else:
                     st.error("Please provide a valid Gmail address.")
         with button_cols[1]:
-            if st.button("Send test email", use_container_width=True):
-                if updated_email:
-                    settings_manager.set("target_email", updated_email)
-                    target_email = updated_email
+            if st.button("Send test email"):
+                if normalized_input:
+                    settings_manager.set("target_email", normalized_input)
+                    target_email = normalized_input
                     send_gmail_test_email(
-                        updated_email,
+                        normalized_input,
                         "Sent a verification email. Check your Gmail inbox to confirm delivery.",
                     )
                 else:
@@ -910,8 +977,7 @@ with st.container():
             settings_manager.set("polling_min_minutes", polling_min)
             settings_manager.set("polling_max_minutes", polling_max)
             poll_message = "Updated polling cadence saved instantly."
-        st.caption(poll_message)
-        st.caption("Persistent Outlook profile lives in `automation_state/chrome_profile/`.")
+        st.markdown(f"<div class='small-note'>{poll_message}</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 profile_ready = AUTOMATION_STATE.outlook.profile_ready()
@@ -924,21 +990,22 @@ with st.container():
         f"<span class='pill'>{status_label}</span>",
         unsafe_allow_html=True,
     )
-    st.caption(
-        "Launch the dedicated Chrome window to refresh your Outlook login whenever Microsoft asks for verification."
+    st.markdown(
+        "<div class='small-note'>Launch the dedicated Chrome window whenever Microsoft asks you to verify the session. Keep it open and signed in.</div>",
+        unsafe_allow_html=True,
     )
     manual_cols = st.columns(2)
     with manual_cols[0]:
-        if st.button("Login to Outlook", use_container_width=True):
+        if st.button("Login to Outlook"):
             try:
                 AUTOMATION_STATE.outlook.launch_manual_login()
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Failed to launch manual login: {exc}")
     with manual_cols[1]:
-        if st.button("Save & Close", use_container_width=True):
+        if st.button("Save session"):
             try:
                 AUTOMATION_STATE.outlook.complete_manual_login()
-                st.success("Outlook profile saved. Future runs will reuse this login.")
+                st.success("Session saved. Leave the Outlook window open so scans can reuse it instantly.")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Failed to persist profile: {exc}")
     if MANUAL_LOGIN_EVENT.is_set():
@@ -964,7 +1031,7 @@ with st.container():
 
     control_cols = st.columns([1.1, 1, 1, 1])
     with control_cols[0]:
-        if st.button("▶️ Start scanning", disabled=AUTOMATION_STATE.running, use_container_width=True):
+        if st.button("▶️ Start scanning", disabled=AUTOMATION_STATE.running):
             if not settings_manager.get("target_email"):
                 st.error("Please save your target Gmail address first.")
             elif not AUTOMATION_STATE.outlook.profile_ready():
@@ -984,14 +1051,14 @@ with st.container():
                 WORKER_THREAD.start()
                 st.success("Automation started. Logs will appear below.")
     with control_cols[1]:
-        if st.button("⏹️ Stop", disabled=not AUTOMATION_STATE.running, use_container_width=True):
+        if st.button("⏹️ Stop", disabled=not AUTOMATION_STATE.running):
             STOP_EVENT.set()
             if WORKER_THREAD and WORKER_THREAD.is_alive():
                 WORKER_THREAD.join(timeout=2)
             AUTOMATION_STATE.running = False
             st.info("Automation stop requested.")
     with control_cols[2]:
-        if st.button("🔍 Run a check", disabled=AUTOMATION_STATE.running, use_container_width=True):
+        if st.button("🔍 Run a check", disabled=AUTOMATION_STATE.running):
             if not AUTOMATION_STATE.outlook.profile_ready():
                 MANUAL_LOGIN_EVENT.set()
                 st.error("Outlook profile not found. Launch the manual login window and save the session before running a check.")
@@ -1008,7 +1075,6 @@ with st.container():
             help="When enabled, the log view auto-refreshes whenever this tab stays in focus.",
         )
         st.session_state["live_refresh"] = live_refresh
-    st.caption("Automation picks a random delay inside your polling window after every scan.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("---")

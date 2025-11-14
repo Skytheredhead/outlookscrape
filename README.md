@@ -78,11 +78,11 @@ If you see `Error 403: access_denied` while authorizing Gmail sending access:
    python -m streamlit run app.py
    ```
 4. The dashboard will automatically open in your default browser at `http://localhost:8501`.
-5. Use **Login to Outlook** to open a non-headless Chrome window, sign into Outlook manually, then click **Save & Close** to store the profile.
+5. Use **Login to Outlook** to open a non-headless Chrome window, sign into Outlook manually, then click **Save session** to mark the profile ready. Leave the Outlook window open; automation reuses the same browser instance.
 6. Adjust the Gmail destination, run a test email, fine-tune the polling window, and press **Start scanning** to begin forwarding unread Outlook emails.
 
 ## Notes
 - Forwarded emails are tracked to avoid duplicates and daily counts reset automatically.
 - If Outlook prompts for CAPTCHA or blocks the session, the tool pauses for 30 minutes and emails you an alert through Gmail.
-- Logs and state files live under the `automation_state/` folder.
+- Logs and state files live under the `automation_state/` folder, and the Outlook window auto-opens at launch whenever the saved profile is ready.
 - Always test with dummy accounts before using production mailboxes.
