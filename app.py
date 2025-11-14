@@ -428,11 +428,59 @@ class OutlookAutomation:
         return None
 
     @staticmethod
-    def _safe_click(driver: webdriver.Chrome, element: Any) -> bool:
+    def _human_mouse_move(driver: webdriver.Chrome, target_element: Optional[Any] = None) -> None:
+        """Simulate a short sequence of mouse movements to appear more human."""
+
+        try:
+            width, height = driver.execute_script(
+                "return [window.innerWidth || document.documentElement.clientWidth || 0, "
+                "window.innerHeight || document.documentElement.clientHeight || 0];"
+            )
+            if not width or not height:
+                return
+
+            width = max(int(width), 1)
+            height = max(int(height), 1)
+
+            start_x = random.randint(int(width * 0.2), int(width * 0.8))
+            start_y = random.randint(int(height * 0.2), int(height * 0.8))
+
+            steps = random.randint(3, 6)
+            points: List[Tuple[int, int]] = [(start_x, start_y)]
+            current_x, current_y = start_x, start_y
+            for _ in range(steps - 1):
+                current_x = max(5, min(width - 5, current_x + random.randint(-90, 90)))
+                current_y = max(5, min(height - 5, current_y + random.randint(-70, 70)))
+                points.append((current_x, current_y))
+
+            body = driver.find_element(By.TAG_NAME, "body")
+            actions = ActionChains(driver)
+            actions.move_to_element_with_offset(body, points[0][0], points[0][1])
+            prev_x, prev_y = points[0]
+            for x, y in points[1:]:
+                actions.pause(random.uniform(0.05, 0.18))
+                actions.move_by_offset(x - prev_x, y - prev_y)
+                prev_x, prev_y = x, y
+
+            if target_element is not None:
+                actions.pause(random.uniform(0.08, 0.25))
+                actions.move_to_element(target_element)
+                actions.pause(random.uniform(0.05, 0.15))
+
+            actions.perform()
+        except Exception:  # noqa: BLE001
+            if target_element is not None:
+                try:
+                    ActionChains(driver).move_to_element(target_element).perform()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _safe_click(self, driver: webdriver.Chrome, element: Any) -> bool:
         """Click an element with fallbacks to reduce flakiness."""
 
         try:
-            ActionChains(driver).move_to_element(element).pause(random.uniform(0.5, 1.2)).click().perform()
+            self._human_mouse_move(driver, element)
+            ActionChains(driver).pause(random.uniform(0.1, 0.3)).click().perform()
             return True
         except WebDriverException:
             try:
@@ -557,6 +605,8 @@ class OutlookAutomation:
             except TimeoutException:
                 log_message(f"{folder_name} appears empty or failed to load.")
                 continue
+            if random.random() < 0.85:
+                self._human_mouse_move(driver)
             human_delay()
             email_rows = driver.find_elements(By.CSS_SELECTOR, 'div[role="option"]')
             for row in email_rows:
